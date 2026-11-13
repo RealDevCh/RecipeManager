@@ -1,11 +1,20 @@
 import sqlite3
 import os
+import io
+import zipfile
 import hashlib
+import difflib
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
+from PIL import Image, ImageChops
 
 KST = timezone(timedelta(hours=9))
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "recipe_manager.db")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+DB_PATH = os.path.join(DATA_DIR, "recipe_manager.db")
+
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
+TEXT_EXTS = {".xml", ".txt", ".ini", ".cfg", ".json", ".csv", ".dat", ".log", ".rcp"}
 
 
 def get_kst_now() -> datetime:
@@ -18,7 +27,7 @@ def get_kst_str(fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
 
 def get_connection() -> sqlite3.Connection:
     """SQLite 커넥션 획득 (Row Factory 및 FK 활성화)"""
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    os.makedirs(DATA_DIR, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.row_factory = sqlite3.Row
@@ -27,7 +36,7 @@ def get_connection() -> sqlite3.Connection:
 
 def init_db():
     """데이터베이스 초기화, 스키마 생성, 무손실 마이그레이션 및 초기 시드 데이터 세팅"""
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    os.makedirs(DATA_DIR, exist_ok=True)
     with get_connection() as conn:
         cursor = conn.cursor()
 
@@ -372,27 +381,58 @@ def _seed_initial_data():
         conn.commit()
 
 
+def ensure_sample_recipe_folder() -> tuple[str, str]:
+    """폴더 Diff 테스트용 샘플 디렉터리가 없으면 자동 생성 후 (source_dir, target_dir) 반환"""
+    src_dir = os.path.join(BASE_DIR, "sample_recipe_folder", "source_pkg")
+    tgt_dir = os.path.join(BASE_DIR, "sample_recipe_folder", "target_eqp01")
+    os.makedirs(src_dir, exist_ok=True)
+    os.makedirs(tgt_dir, exist_ok=True)
+
+    s_main = os.path.join(src_dir, "Main_Recipe.xml")
+    if not os.path.exists(s_main):
+        with open(s_main, "w", encoding="utf-8") as f:
+            f.write("<Recipe>\n  <Product>Prod_Alpha</Product>\n  <Align>\n    <Threshold>120</Threshold>\n    <Timeout>5000</Timeout>\n  </Align>\n</Recipe>")
+
+    s_vis = os.path.join(src_dir, "Vision_Cam1.xml")
+    if not os.path.exists(s_vis):
+        with open(s_vis, "w", encoding="utf-8") as f:
+            f.write("<Vision>\n  <ExposureUs>2500</ExposureUs>\n  <Gain>1.20</Gain>\n</Vision>")
+
+    t_main = os.path.join(tgt_dir, "Main_Recipe.xml")
+    if not os.path.exists(t_main):
+        with open(t_main, "w", encoding="utf-8") as f:
+            f.write("<Recipe>\n  <Product>Prod_Alpha</Product>\n  <Align>\n    <Threshold>145</Threshold>\n    <Timeout>5000</Timeout>\n    <RetryCount>3</RetryCount>\n  </Align>\n</Recipe>")
+
+    t_vis = os.path.join(tgt_dir, "Vision_Cam1.xml")
+    if not os.path.exists(t_vis):
+        with open(t_vis, "w", encoding="utf-8") as f:
+            f.write("<Vision>\n  <ExposureUs>2500</ExposureUs>\n  <Gain>1.20</Gain>\n</Vision>")
+
+    return src_dir, tgt_dir
+
+
 # ==============================================================================
-# v1.6.0 핵심 비즈니스 로직 (4대 핵심 함수 완전 구현)
+# v1.6.0 핵심 비즈니스 로직 (우선순위 조정 + XML 파싱 + Handler-Vision 상세)
 # ==============================================================================
 
 def swap_todo_priority(id_a: int, id_b: int):
-    """[기능 1] 두 할 일 항목의 priority_order 값을 서로 교환"""
+    """두 할 일 항목의 priority_order 값을 서로 교환"""
     with get_connection() as conn:
-        row_a = conn.execute("SELECT priority_order FROM work_requests WHERE id = ?", (id_a,)).fetchone()
-        row_b = conn.execute("SELECT priority_order FROM work_requests WHERE id = ?", (id_b,)).fetchone()
+        row_a = conn.execute("SELECT priority_order FROM work_requests WHERE id = ?", (int(id_a),)).fetchone()
+        row_b = conn.execute("SELECT priority_order FROM work_requests WHERE id = ?", (int(id_b),)).fetchone()
         if row_a and row_b:
             order_a = row_a["priority_order"]
             order_b = row_b["priority_order"]
             if order_a == order_b:
-                order_a, order_b = id_a, id_b
-            conn.execute("UPDATE work_requests SET priority_order = ?, updated_at = ? WHERE id = ?", (order_b, get_kst_str(), id_a))
-            conn.execute("UPDATE work_requests SET priority_order = ?, updated_at = ? WHERE id = ?", (order_a, get_kst_str(), id_b))
+                order_a, order_b = int(id_a), int(id_b)
+            now_str = get_kst_str()
+            conn.execute("UPDATE work_requests SET priority_order = ?, updated_at = ? WHERE id = ?", (order_b, now_str, int(id_a)))
+            conn.execute("UPDATE work_requests SET priority_order = ?, updated_at = ? WHERE id = ?", (order_a, now_str, int(id_b)))
             conn.commit()
 
 
 def update_todo_orders_by_ids(ordered_ids: list[int]):
-    """[기능 2-A] 드래그 정렬 완료된 ID 리스트 순서대로 priority_order 일괄 부여"""
+    """드래그 정렬 완료된 ID 리스트 순서대로 priority_order 일괄 부여"""
     now_str = get_kst_str()
     with get_connection() as conn:
         for idx, todo_id in enumerate(ordered_ids, start=1):
@@ -403,23 +443,8 @@ def update_todo_orders_by_ids(ordered_ids: list[int]):
         conn.commit()
 
 
-def reorder_todos_by_titles(ordered_titles: list[str], current_todos: list[dict]):
-    """[기능 2-B] 드래그 정렬된 키워드 리스트 기준으로 DB priority_order 재정렬"""
-    title_to_ids: dict[str, list[int]] = {}
-    for item in current_todos:
-        title_to_ids.setdefault(item["title"], []).append(int(item["id"]))
-
-    ordered_ids = []
-    for title in ordered_titles:
-        if title in title_to_ids and title_to_ids[title]:
-            ordered_ids.append(title_to_ids[title].pop(0))
-
-    if ordered_ids:
-        update_todo_orders_by_ids(ordered_ids)
-
-
 def parse_xml_key_params(xml_str: str) -> list[dict]:
-    """[기능 3] XML 문자열에서 말단(Leaf) 파라미터 태그명과 설정값을 추출"""
+    """XML 문자열에서 말단(Leaf) 파라미터 태그명과 설정값을 추출"""
     if not xml_str or not xml_str.strip():
         return []
     try:
@@ -447,7 +472,7 @@ def parse_xml_key_params(xml_str: str) -> list[dict]:
 
 
 def get_handler_linked_visions_detail(handler_id: int) -> list[dict]:
-    """[기능 4] Handler에 연결된 Vision 목록 + 주요 파라미터 + 최근 변경점 + Align 이미지 조회"""
+    """Handler에 연결된 Vision 목록 + 주요 파라미터 + 최근 변경점 + Align 이미지 조회"""
     with get_connection() as conn:
         visions = conn.execute("""
             SELECT v.id, v.name, v.version, v.description, v.xml_content, m.seq_order
@@ -493,6 +518,12 @@ def get_todos(include_completed: bool = False) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def get_todo_by_id(todo_id: int) -> dict | None:
+    with get_connection() as conn:
+        row = conn.execute("SELECT * FROM work_requests WHERE id = ?", (int(todo_id),)).fetchone()
+        return dict(row) if row else None
+
+
 def create_todo(
     title: str,
     content: str = "",
@@ -501,9 +532,6 @@ def create_todo(
     product: str = "",
     step: str = "",
     equipment: str = "",
-    department: str = "",
-    requester: str = "",
-    assignee: str = "",
     due_date: str = ""
 ) -> int:
     now_str = get_kst_str()
@@ -515,12 +543,12 @@ def create_todo(
         cur.execute("""
             INSERT INTO work_requests (
                 req_type, title, content, product, step, equipment,
-                department, requester, assignee, urgency, priority_order, status, due_date, created_at, updated_at
+                urgency, priority_order, status, due_date, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '접수', ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, '접수', ?, ?, ?)
         """, (
             req_type, title.strip(), content, product, step, equipment,
-            department, requester, assignee, urgency, next_ord, due_date, now_str, now_str
+            urgency, next_ord, due_date, now_str, now_str
         ))
         new_id = cur.lastrowid
         if next_ord == 0:
@@ -581,7 +609,7 @@ def delete_work_request(req_id: int):
 
 
 # ==============================================================================
-# 기준정보 CRUD
+# 기준정보 & Code 매핑 이력 CRUD
 # ==============================================================================
 
 def get_master_data(category: str, active_only: bool = True) -> list[dict]:
@@ -625,10 +653,6 @@ def delete_master_data(item_id: int):
         conn.commit()
 
 
-# ==============================================================================
-# Code 매핑 이력 CRUD (MD-04, MD-05)
-# ==============================================================================
-
 def get_active_code_mapping(code: str) -> dict | None:
     with get_connection() as conn:
         row = conn.execute("""
@@ -662,12 +686,6 @@ def add_or_update_code_mapping(code: str, product: str, module: str, purpose: st
         conn.execute("INSERT OR IGNORE INTO master_data (category, name, created_at) VALUES ('DeviceCode', ?, ?)", (code, now_str))
         conn.commit()
     return True
-
-
-def delete_code_mapping(mapping_id: int):
-    with get_connection() as conn:
-        conn.execute("DELETE FROM code_mappings WHERE id = ?", (int(mapping_id),))
-        conn.commit()
 
 
 # ==============================================================================
@@ -751,12 +769,6 @@ def delete_recipe_image(image_id: int):
         conn.commit()
 
 
-def delete_recipe_condition(cond_id: int):
-    with get_connection() as conn:
-        conn.execute("DELETE FROM recipe_conditions WHERE id = ?", (int(cond_id),))
-        conn.commit()
-
-
 def delete_handler_vision_map(map_id: int):
     with get_connection() as conn:
         conn.execute("DELETE FROM handler_vision_map WHERE id = ?", (int(map_id),))
@@ -775,13 +787,184 @@ def delete_attachment(att_id: int):
         conn.commit()
 
 
-def delete_recipe_change(chg_id: int):
-    with get_connection() as conn:
-        conn.execute("DELETE FROM recipe_changes WHERE id = ?", (int(chg_id),))
-        conn.commit()
-
-
 def delete_deployment(dep_id: int):
     with get_connection() as conn:
         conn.execute("DELETE FROM deployments WHERE id = ?", (int(dep_id),))
         conn.commit()
+
+
+# ==============================================================================
+# Diff 검증 엔진 (폴더 트리 SHA256 + XML Line Diff + 이미지 픽셀 Diff)
+# ==============================================================================
+
+def scan_recipe_folder(folder_path: str) -> dict:
+    file_map = {}
+    if not folder_path or not os.path.exists(folder_path) or not os.path.isdir(folder_path):
+        return file_map
+
+    for root, _, files in os.walk(folder_path):
+        for fname in files:
+            full_path = os.path.join(root, fname)
+            rel_path = os.path.relpath(full_path, start=folder_path).replace("\\", "/")
+            try:
+                stat = os.stat(full_path)
+                sha256 = hashlib.sha256()
+                with open(full_path, "rb") as bf:
+                    for chunk in iter(lambda: bf.read(65536), b""):
+                        sha256.update(chunk)
+                file_map[rel_path] = {
+                    "full_path": full_path,
+                    "rel_path": rel_path,
+                    "ext": os.path.splitext(fname)[1].lower(),
+                    "size": stat.st_size,
+                    "hash": sha256.hexdigest(),
+                }
+            except Exception:
+                pass
+    return file_map
+
+
+def compare_folders(source_dir: str, target_dir: str) -> list[dict]:
+    src_map = scan_recipe_folder(source_dir)
+    tgt_map = scan_recipe_folder(target_dir)
+    all_keys = sorted(set(src_map.keys()) | set(tgt_map.keys()))
+
+    results = []
+    for k in all_keys:
+        in_src = k in src_map
+        in_tgt = k in tgt_map
+        if in_src and in_tgt:
+            status = "🟢 일치" if src_map[k]["hash"] == tgt_map[k]["hash"] else "🟡 내용 변경"
+            results.append({
+                "파일경로": k,
+                "상태": status,
+                "기준크기(B)": src_map[k]["size"],
+                "설비크기(B)": tgt_map[k]["size"],
+                "기준해시": src_map[k]["hash"][:12],
+                "설비해시": tgt_map[k]["hash"][:12],
+                "src_path": src_map[k]["full_path"],
+                "tgt_path": tgt_map[k]["full_path"],
+                "ext": src_map[k]["ext"],
+            })
+        elif in_src and not in_tgt:
+            results.append({
+                "파일경로": k,
+                "상태": "🔴 누락 (설비에 없음)",
+                "기준크기(B)": src_map[k]["size"],
+                "설비크기(B)": 0,
+                "기준해시": src_map[k]["hash"][:12],
+                "설비해시": "-",
+                "src_path": src_map[k]["full_path"],
+                "tgt_path": None,
+                "ext": src_map[k]["ext"],
+            })
+        else:
+            results.append({
+                "파일경로": k,
+                "상태": "🔵 추가 (신규 파일)",
+                "기준크기(B)": 0,
+                "설비크기(B)": tgt_map[k]["size"],
+                "기준해시": "-",
+                "설비해시": tgt_map[k]["hash"][:12],
+                "src_path": None,
+                "tgt_path": tgt_map[k]["full_path"],
+                "ext": tgt_map[k]["ext"],
+            })
+    return results
+
+
+def compute_text_diff_html(text_a: str, text_b: str) -> tuple[bool, str]:
+    lines_a = (text_a or "").splitlines(keepends=True)
+    lines_b = (text_b or "").splitlines(keepends=True)
+    diff_lines = list(difflib.unified_diff(lines_a, lines_b, fromfile="Source_A", tofile="Target_B"))
+    if not diff_lines:
+        return True, ""
+
+    html_parts = []
+    for line in diff_lines:
+        esc = line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        if esc.startswith("+") and not esc.startswith("+++"):
+            html_parts.append(f"<span style='color:#4ec9b0;font-weight:bold;'>{esc}</span>")
+        elif esc.startswith("-") and not esc.startswith("---"):
+            html_parts.append(f"<span style='color:#f14c4c;font-weight:bold;'>{esc}</span>")
+        else:
+            html_parts.append(esc)
+    return False, "".join(html_parts)
+
+
+def compute_image_pixel_diff(img1: Image.Image, img2: Image.Image, threshold: int = 15) -> dict:
+    im1 = img1.convert("RGB")
+    im2 = img2.convert("RGB")
+    if im1.size != im2.size:
+        im2_comp = im2.resize(im1.size, Image.Resampling.BILINEAR)
+    else:
+        im2_comp = im2
+
+    diff_gray = ImageChops.difference(im1, im2_comp).convert("L")
+    mask_l = diff_gray.point(lambda p: 255 if p >= threshold else 0, mode="L")
+    hist = mask_l.histogram()
+    diff_pixels = hist[255] if len(hist) > 255 else 0
+    total_pixels = im1.size[0] * im1.size[1]
+    diff_ratio = (diff_pixels / total_pixels) * 100.0 if total_pixels > 0 else 0.0
+
+    base_gray = im1.convert("L").convert("RGBA")
+    red_layer = Image.new("RGBA", im1.size, (255, 0, 0, 210))
+    diff_visual = Image.composite(red_layer, base_gray, mask_l)
+
+    return {
+        "total_pixels": total_pixels,
+        "diff_pixels": diff_pixels,
+        "diff_ratio": round(diff_ratio, 2),
+        "match_ratio": round(100.0 - diff_ratio, 2),
+        "diff_visual": diff_visual,
+    }
+
+
+# ==============================================================================
+# 백업 & 복원 엔진 (NF-03)
+# ==============================================================================
+
+def create_system_backup() -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        if os.path.exists(DATA_DIR):
+            for root, _, files in os.walk(DATA_DIR):
+                for fname in files:
+                    full_p = os.path.join(root, fname)
+                    rel_p = os.path.relpath(full_p, start=DATA_DIR)
+                    zf.write(full_p, os.path.join("data", rel_p))
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def restore_system_backup(zip_bytes: bytes) -> tuple[bool, str]:
+    buf = io.BytesIO(zip_bytes)
+    try:
+        with zipfile.ZipFile(buf, "r") as zf:
+            namelist = zf.namelist()
+            if not any("recipe_manager.db" in name for name in namelist):
+                return False, "백업 파일 내에 'recipe_manager.db'가 없어 복원할 수 없습니다."
+
+            os.makedirs(DATA_DIR, exist_ok=True)
+            for item in zf.infolist():
+                if item.is_dir():
+                    continue
+                clean_name = item.filename.replace("\\", "/")
+                if clean_name.startswith("data/"):
+                    clean_name = clean_name[5:]
+                if ".." in clean_name:
+                    continue
+                target_path = os.path.join(DATA_DIR, clean_name)
+                os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                with open(target_path, "wb") as out_f:
+                    out_f.write(zf.read(item.filename))
+
+        with sqlite3.connect(DB_PATH) as check_conn:
+            res = check_conn.execute("PRAGMA integrity_check;").fetchone()
+            if not res or res[0] != "ok":
+                return False, "복원된 데이터베이스 무결성 검사에 실패했습니다."
+
+        migrate_todo_and_recipe_views()
+        return True, "데이터베이스 및 첨부 이미지가 성공적으로 복원되었습니다."
+    except Exception as e:
+        return False, f"복원 중 오류 발생: {e}"

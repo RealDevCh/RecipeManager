@@ -1,21 +1,14 @@
-# RecipeManager v1.6.0 (완성본)
+# RecipeManager v1.6.0 (통합 구조 · GitHub/모바일 배포 최적화)
 
-반도체 검사·계측 업무를 위한 **할 일 우선순위 관리 · Handler/Vision 레시피 확인 · 설비 횡전개 · 정밀 Diff · 시스템 백업 통합 관리 시스템**입니다.
+`pages/` 하위 폴더 없이 **루트 디렉터리 파일 3개(`app.py`, `database.py`, `requirements.txt`)만으로 GitHub 및 Streamlit Cloud에 즉시 배포할 수 있는 통합 구조 패키지**입니다.
 
-## 🚀 빠른 실행 방법
-### Windows
-1. 압축 해제 후 폴더 안의 **`run.bat`** 파일을 더블 클릭합니다.
-2. 패키지 자동 설치 후 브라우저에서 `http://localhost:8501`이 열립니다.
+## 🚀 GitHub 웹/모바일 업로드 방법 (단 3개 파일)
+1. GitHub 저장소(`RealDevCh/RecipeManager`)에서 **`Add file` → `Upload files`** (또는 모바일에서 파일 생성)를 선택합니다.
+2. 아래 **3개 파일만** 루트 경로에 올리면 모든 기능과 샘플 데이터(`data/`, `sample_recipe_folder/`)가 실행 시 자동 생성됩니다.
+   - `app.py`
+   - `database.py`
+   - `requirements.txt`
 
-### Mac / Linux / VS Code 터미널
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-## 📌 v1.6.0 핵심 구성
-- **`✅ 할 일`**: 키워드 목록 + 우측 세부 정보(Split-View), `▲`/`▼` 버튼 및 마우스 드래그 우선순위 조절, 원클릭 완료, 완료 표시 토글, 긴급도별 색상 강조, `Ctrl+V` 이미지 증빙
-- **`🧩 레시피 확인`**: Handler Recipe 메인 노출 → 클릭 시 연결된 Vision Recipe 체인 + 주요 파라미터(XML 자동 추출) + 최근 변경점 + Align 이미지 확인
-- **`⚙️ 레시피 등록 및 매핑`**: 상단 팝오버 신규 등록, 1:N 공정 조건 및 Device Code 자동완성, Handler-Vision N:M 연결, 공유 Vision 영향도 역추적
-- **`🚀 설비 횡전개 및 Diff`**: 설비별 동기화 현황, 다중 설비 횡전개 트래커, 폴더 트리 SHA256 Diff, XML Diff, 픽셀 오차 마스크 Diff
-- **`🛠️ 기준정보 및 백업`**: 공통 코드 CRUD, Device Code 매핑 이력, 감사 로그, 원클릭 백업/복원(구버전 DB 자동 마이그레이션 포함)
+## 💻 로컬 PC 실행 방법
+- **Windows**: `run.bat` 더블 클릭
+- **터미널**: `pip install -r requirements.txt && streamlit run app.py`
