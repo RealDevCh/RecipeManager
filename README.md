@@ -1,21 +1,21 @@
-# RecipeManager v1.4.1
+# RecipeManager v1.6.0 (완성본)
 
-반도체 검사·계측 업무를 위한 **Recipe / 업무 요청 / 횡전개 / 설비 폴더 Diff / Code 고속 검색 / 동일 조건 복수 Handler 관리 통합 시스템**입니다.
+반도체 검사·계측 업무를 위한 **할 일 우선순위 관리 · Handler/Vision 레시피 확인 · 설비 횡전개 · 정밀 Diff · 시스템 백업 통합 관리 시스템**입니다.
 
-## 📌 v1.4.1 신규 확장 기능
-1. **📌 Recipe CRUD 내 공정 조건(Product, Step, Module, Purpose) 및 Device Code 자동완성 통합**:
-   - Handler Recipe 등록/수정 시 어떤 제품과 공정에 쓰이는지 직접 지정할 수 있도록 폼을 개편했습니다.
-   - Device Code(예: AAA)를 선택하면 등록된 Product, Module, Purpose가 자동으로 채워집니다.
-2. **💡 동일 공정 조건 내 복수 Handler Recipe (1:N) & 구분 Description 관리**:
-   - 동일한 (Product + Step + Module + Purpose) 조건이라도 현장 상황(표준 양산용, 저조도 튜닝용, 특정 설비 전용)에 따라 Handler가 N개 존재할 수 있습니다.
-   - 각 Handler별로 **"동일 조건 내 구분 설명 (Condition Description)"** 필드를 신설하여 검색 화면과 목록에서 그 차이와 적용 목적을 즉시 파악할 수 있도록 구현했습니다.
-3. **⚡ Code + Step 고속 역추적 검색 (SC-03, MD-05)**:
-   - 디바이스 코드와 Step만으로 현재 유효한 공정 조건과 등록된 복수 Handler Recipe 옵션들을 구분 설명 및 Align 썸네일과 함께 탐색합니다.
-4. **전수 안전성 검증 완료**:
-   - `sqlite3.Row` UI 유입 차단(원시 타입 직렬화 Sanitization), Null/None 사전 가드, 멀티라인 표준 문자열 적용.
+## 🚀 빠른 실행 방법
+### Windows
+1. 압축 해제 후 폴더 안의 **`run.bat`** 파일을 더블 클릭합니다.
+2. 패키지 자동 설치 후 브라우저에서 `http://localhost:8501`이 열립니다.
 
-## 🚀 빠른 시작 가이드
+### Mac / Linux / VS Code 터미널
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
+
+## 📌 v1.6.0 핵심 구성
+- **`✅ 할 일`**: 키워드 목록 + 우측 세부 정보(Split-View), `▲`/`▼` 버튼 및 마우스 드래그 우선순위 조절, 원클릭 완료, 완료 표시 토글, 긴급도별 색상 강조, `Ctrl+V` 이미지 증빙
+- **`🧩 레시피 확인`**: Handler Recipe 메인 노출 → 클릭 시 연결된 Vision Recipe 체인 + 주요 파라미터(XML 자동 추출) + 최근 변경점 + Align 이미지 확인
+- **`⚙️ 레시피 등록 및 매핑`**: 상단 팝오버 신규 등록, 1:N 공정 조건 및 Device Code 자동완성, Handler-Vision N:M 연결, 공유 Vision 영향도 역추적
+- **`🚀 설비 횡전개 및 Diff`**: 설비별 동기화 현황, 다중 설비 횡전개 트래커, 폴더 트리 SHA256 Diff, XML Diff, 픽셀 오차 마스크 Diff
+- **`🛠️ 기준정보 및 백업`**: 공통 코드 CRUD, Device Code 매핑 이력, 감사 로그, 원클릭 백업/복원(구버전 DB 자동 마이그레이션 포함)

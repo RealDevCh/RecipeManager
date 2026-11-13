@@ -1,17 +1,36 @@
 import sqlite3
 import os
 import hashlib
-from datetime import datetime
+import xml.etree.ElementTree as ET
+from datetime import datetime, timezone, timedelta
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "data", "recipe_manager.db")
+KST = timezone(timedelta(hours=9))
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "recipe_manager.db")
+
+
+def get_kst_now() -> datetime:
+    return datetime.now(KST)
+
+
+def get_kst_str(fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
+    return get_kst_now().strftime(fmt)
+
+
+def get_connection() -> sqlite3.Connection:
+    """SQLite 커넥션 획득 (Row Factory 및 FK 활성화)"""
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("PRAGMA foreign_keys = ON;")
+    conn.row_factory = sqlite3.Row
+    return conn
+
 
 def init_db():
-    """데이터베이스 초기화 및 테이블 생성 (FK 활성화)"""
+    """데이터베이스 초기화, 스키마 생성, 무손실 마이그레이션 및 초기 시드 데이터 세팅"""
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("PRAGMA foreign_keys = ON;")
+    with get_connection() as conn:
         cursor = conn.cursor()
-        
+
         # 1. 기준정보 테이블
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS master_data (
@@ -19,11 +38,11 @@ def init_db():
                 category TEXT NOT NULL,
                 name TEXT NOT NULL,
                 is_active INTEGER DEFAULT 1,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT,
                 UNIQUE(category, name)
             );
         """)
-        
+
         # 2. Recipe 마스터 테이블
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS recipes (
@@ -33,7 +52,7 @@ def init_db():
                 version TEXT NOT NULL,
                 description TEXT,
                 xml_content TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT,
                 UNIQUE(recipe_type, name, version)
             );
         """)
@@ -46,11 +65,11 @@ def init_db():
                 file_name TEXT NOT NULL,
                 file_path TEXT NOT NULL,
                 tag TEXT DEFAULT 'ALIGN',
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT,
                 FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
             );
         """)
-        
+
         # 4. Handler-Vision 참조 관계 (N:M, 순서 유지)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS handler_vision_map (
@@ -58,14 +77,14 @@ def init_db():
                 handler_id INTEGER NOT NULL,
                 vision_id INTEGER NOT NULL,
                 seq_order INTEGER DEFAULT 1,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT,
                 FOREIGN KEY (handler_id) REFERENCES recipes(id) ON DELETE CASCADE,
                 FOREIGN KEY (vision_id) REFERENCES recipes(id) ON DELETE CASCADE,
                 UNIQUE(handler_id, vision_id)
             );
         """)
 
-        # 5. 조건별 Recipe 매핑 (Product-Step-Module-Purpose -> Handler N개 가능, condition_desc 포함)
+        # 5. 조건별 Recipe 매핑 (Product-Step-Module-Purpose -> Handler 1:N)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS recipe_conditions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,8 +93,8 @@ def init_db():
                 module TEXT NOT NULL,
                 purpose TEXT NOT NULL,
                 handler_id INTEGER NOT NULL,
-                condition_desc TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                condition_desc TEXT DEFAULT '',
+                created_at TEXT,
                 FOREIGN KEY (handler_id) REFERENCES recipes(id) ON DELETE CASCADE,
                 UNIQUE(product, step, module, purpose, handler_id)
             );
@@ -89,20 +108,20 @@ def init_db():
                 product TEXT NOT NULL,
                 module TEXT NOT NULL,
                 purpose TEXT NOT NULL,
-                valid_from DATETIME DEFAULT CURRENT_TIMESTAMP,
-                valid_to DATETIME,
+                valid_from TEXT,
+                valid_to TEXT,
                 reason TEXT,
                 certainty TEXT DEFAULT '확정' CHECK(certainty IN ('확정', '추정', '검토필요')),
                 created_by TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT
             );
         """)
-        
-        # 7. 업무 요청 테이블
+
+        # 7. 업무 요청 / 할 일 테이블
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS work_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                req_type TEXT NOT NULL,
+                req_type TEXT NOT NULL DEFAULT '할 일',
                 title TEXT NOT NULL,
                 content TEXT,
                 product TEXT,
@@ -115,13 +134,15 @@ def init_db():
                 assignee TEXT,
                 lot_id TEXT,
                 recipe_id TEXT,
+                urgency TEXT DEFAULT '보통',
+                priority_order INTEGER DEFAULT 0,
                 status TEXT DEFAULT '접수' CHECK(status IN ('접수', '진행중', '평가/검증', '완료', '보류')),
                 due_date TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT,
+                updated_at TEXT
             );
         """)
-        
+
         # 8. 첨부 증빙 테이블
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS attachments (
@@ -129,7 +150,7 @@ def init_db():
                 request_id INTEGER NOT NULL,
                 file_name TEXT NOT NULL,
                 file_path TEXT NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT,
                 FOREIGN KEY (request_id) REFERENCES work_requests(id) ON DELETE CASCADE
             );
         """)
@@ -138,7 +159,7 @@ def init_db():
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS recipe_changes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                request_id INTEGER NOT NULL,
+                request_id INTEGER,
                 target_type TEXT NOT NULL,
                 target_name TEXT NOT NULL,
                 change_type TEXT NOT NULL,
@@ -147,8 +168,8 @@ def init_db():
                 change_reason TEXT,
                 operator TEXT,
                 evaluation_result TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (request_id) REFERENCES work_requests(id) ON DELETE CASCADE
+                created_at TEXT,
+                FOREIGN KEY (request_id) REFERENCES work_requests(id) ON DELETE SET NULL
             );
         """)
 
@@ -162,7 +183,7 @@ def init_db():
                 reason TEXT,
                 created_by TEXT,
                 status TEXT DEFAULT '진행중' CHECK(status IN ('대기', '진행중', '완료', '보류')),
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT,
                 FOREIGN KEY (handler_id) REFERENCES recipes(id) ON DELETE CASCADE,
                 FOREIGN KEY (request_id) REFERENCES work_requests(id) ON DELETE SET NULL
             );
@@ -176,9 +197,9 @@ def init_db():
                 equipment TEXT NOT NULL,
                 status TEXT DEFAULT '대기' CHECK(status IN ('대기', '진행중', '검증완료', '실패', '보류')),
                 operator TEXT,
-                applied_at DATETIME,
+                applied_at TEXT,
                 verifier TEXT,
-                verified_at DATETIME,
+                verified_at TEXT,
                 hold_reason TEXT,
                 memo TEXT,
                 FOREIGN KEY (deployment_id) REFERENCES deployments(id) ON DELETE CASCADE,
@@ -194,76 +215,376 @@ def init_db():
                 target_version TEXT,
                 verified_version TEXT,
                 sync_status TEXT DEFAULT '미확인' CHECK(sync_status IN ('일치', '불일치', '미확인')),
-                last_verified_at DATETIME,
+                last_verified_at TEXT,
                 verifier TEXT,
                 FOREIGN KEY (handler_id) REFERENCES recipes(id) ON DELETE SET NULL
             );
         """)
 
-        # 초기 기준정보 및 샘플 데이터 시딩
-        cur_cnt = cursor.execute("SELECT COUNT(*) FROM master_data").fetchone()[0]
-        if cur_cnt == 0:
-            default_items = [
-                ('Product', 'Prod_Alpha'), ('Product', 'Prod_Beta'), ('Product', 'Prod_Gamma'),
-                ('Step', 'Step01_Align'), ('Step', 'Step02_Inspect'), ('Step', 'Step03_Review'),
-                ('Module', 'Mod_Front'), ('Module', 'Mod_Rear'), ('Module', 'Mod_Side'),
-                ('Purpose', 'Mass_Production'), ('Purpose', 'Evaluation'), ('Purpose', 'Setup'),
-                ('Department', '제조기술팀'), ('Department', '공정설계팀'), ('Department', '품질보증팀'),
-                ('Equipment', 'EQP-01'), ('Equipment', 'EQP-02'), ('Equipment', 'EQP-03'), ('Equipment', 'EQP-04'),
-                ('DeviceCode', 'AAA'), ('DeviceCode', 'BBB'), ('DeviceCode', 'B01'), ('DeviceCode', 'C10')
-            ]
-            for cat, val in default_items:
-                cursor.execute("INSERT OR IGNORE INTO master_data (category, name) VALUES (?, ?)", (cat, val))
-            
-            # 기본 Code 매핑 시드
-            cursor.execute("""
-                INSERT OR IGNORE INTO code_mappings (code, product, module, purpose, reason, certainty, created_by)
-                VALUES ('AAA', 'Prod_Alpha', 'Mod_Front', 'Mass_Production', '양산 초기 기준 매핑 승인', '확정', '관리자')
-            """)
-            cursor.execute("""
-                INSERT OR IGNORE INTO code_mappings (code, product, module, purpose, reason, certainty, created_by)
-                VALUES ('BBB', 'Prod_Beta', 'Mod_Rear', 'Evaluation', '신규 디바이스 평가 셋업', '확정', '엔지니어')
-            """)
+        conn.commit()
 
-            # 기본 Handler 및 동일 조건 내 복수 Handler 샘플 시딩
-            cursor.execute("""
-                INSERT OR IGNORE INTO recipes (id, recipe_type, name, version, description, xml_content)
-                VALUES (1, 'HANDLER', 'HANDLER_ALPHA_STD', 'v1.0', '표준 양산 핸들러 레시피', '<Recipe>\n  <Align>\n    <Threshold>120</Threshold>\n  </Align>\n</Recipe>')
-            """)
-            cursor.execute("""
-                INSERT OR IGNORE INTO recipes (id, recipe_type, name, version, description, xml_content)
-                VALUES (2, 'HANDLER', 'HANDLER_ALPHA_LOWLIGHT', 'v1.1', '야간 조도 저하 대응 튜닝본', '<Recipe>\n  <Align>\n    <Threshold>145</Threshold>\n    <Gain>1.3</Gain>\n  </Align>\n</Recipe>')
-            """)
-            cursor.execute("""
-                INSERT OR IGNORE INTO recipes (id, recipe_type, name, version, description, xml_content)
-                VALUES (3, 'VISION', 'VIS_ALIGN_CAM1', 'v1.0', '카메라1 기본 Align 비전', '<Vision>\n  <Exposure>25</Exposure>\n</Vision>')
-            """)
-            
-            # 동일한 (Prod_Alpha + Step01_Align + Mod_Front + Mass_Production) 조건에 N개 Handler 매핑
-            cursor.execute("""
-                INSERT OR IGNORE INTO recipe_conditions (product, step, module, purpose, handler_id, condition_desc)
-                VALUES ('Prod_Alpha', 'Step01_Align', 'Mod_Front', 'Mass_Production', 1, '주간 기본 양산 전용 표준 레시피')
-            """)
-            cursor.execute("""
-                INSERT OR IGNORE INTO recipe_conditions (product, step, module, purpose, handler_id, condition_desc)
-                VALUES ('Prod_Alpha', 'Step01_Align', 'Mod_Front', 'Mass_Production', 2, '야간 조도 변화 시 적용하는 마진 튜닝 레시피')
-            """)
+    migrate_todo_and_recipe_views()
+    _seed_initial_data()
 
-            # Handler-Vision 연결
-            cursor.execute("INSERT OR IGNORE INTO handler_vision_map (handler_id, vision_id, seq_order) VALUES (1, 3, 1)")
-            cursor.execute("INSERT OR IGNORE INTO handler_vision_map (handler_id, vision_id, seq_order) VALUES (2, 3, 1)")
+
+def migrate_todo_and_recipe_views():
+    """구버전(v1.0~v1.5) DB 백업 복원 시에도 무손실로 v1.6.0 컬럼을 추가"""
+    with get_connection() as conn:
+        wr_cols = [row["name"] for row in conn.execute("PRAGMA table_info(work_requests)").fetchall()]
+        if "urgency" not in wr_cols:
+            conn.execute("ALTER TABLE work_requests ADD COLUMN urgency TEXT DEFAULT '보통'")
+        if "priority_order" not in wr_cols:
+            conn.execute("ALTER TABLE work_requests ADD COLUMN priority_order INTEGER DEFAULT 0")
+        conn.execute("UPDATE work_requests SET priority_order = id WHERE priority_order IS NULL OR priority_order = 0")
+
+        rc_cols = [row["name"] for row in conn.execute("PRAGMA table_info(recipe_conditions)").fetchall()]
+        if "condition_desc" not in rc_cols:
+            conn.execute("ALTER TABLE recipe_conditions ADD COLUMN condition_desc TEXT DEFAULT ''")
 
         conn.commit()
 
-def get_connection():
-    """SQLite 커넥션 획득 (Row Factory 및 FK 활성화)"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA foreign_keys = ON;")
-    conn.row_factory = sqlite3.Row
-    return conn
 
-# --- 기준정보 CRUD (안전한 원시 dict 반환 보장) ---
-def get_master_data(category, active_only=True):
+def _seed_initial_data():
+    """초기 구동 시 즉시 체험 가능한 기본 기준정보 및 샘플 데이터 생성"""
+    now_str = get_kst_str()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        m_cnt = cur.execute("SELECT COUNT(*) FROM master_data").fetchone()[0]
+        if m_cnt == 0:
+            default_items = [
+                ("Product", "Prod_Alpha"), ("Product", "Prod_Beta"), ("Product", "Prod_Gamma"),
+                ("Step", "Step01_Align"), ("Step", "Step02_Inspect"), ("Step", "Step03_Review"),
+                ("Module", "Mod_Front"), ("Module", "Mod_Rear"), ("Module", "Mod_Side"),
+                ("Purpose", "Mass_Production"), ("Purpose", "Evaluation"), ("Purpose", "Setup"),
+                ("Department", "제조기술팀"), ("Department", "공정설계팀"), ("Department", "품질보증팀"),
+                ("Equipment", "EQP-01"), ("Equipment", "EQP-02"), ("Equipment", "EQP-03"), ("Equipment", "EQP-04"),
+                ("DeviceCode", "AAA"), ("DeviceCode", "BBB"), ("DeviceCode", "B01"), ("DeviceCode", "C10"),
+            ]
+            for cat, val in default_items:
+                cur.execute("INSERT OR IGNORE INTO master_data (category, name, created_at) VALUES (?, ?, ?)", (cat, val, now_str))
+
+            cur.execute("""
+                INSERT OR IGNORE INTO code_mappings (code, product, module, purpose, valid_from, reason, certainty, created_by, created_at)
+                VALUES ('AAA', 'Prod_Alpha', 'Mod_Front', 'Mass_Production', ?, '양산 초기 기준 매핑 승인', '확정', '관리자', ?)
+            """, (now_str, now_str))
+            cur.execute("""
+                INSERT OR IGNORE INTO code_mappings (code, product, module, purpose, valid_from, reason, certainty, created_by, created_at)
+                VALUES ('BBB', 'Prod_Beta', 'Mod_Rear', 'Evaluation', ?, '신규 디바이스 평가 셋업', '확정', '엔지니어', ?)
+            """, (now_str, now_str))
+
+        r_cnt = cur.execute("SELECT COUNT(*) FROM recipes").fetchone()[0]
+        if r_cnt == 0:
+            cur.execute("""
+                INSERT INTO recipes (recipe_type, name, version, description, xml_content, created_at)
+                VALUES ('HANDLER', 'HDL_ALPHA_MAIN', 'v2.1', 'Prod_Alpha 양산 메인 핸들러', ?, ?)
+            """, ("""<HandlerRecipe>
+  <SequenceCount>2</SequenceCount>
+  <RetryLimit>3</RetryLimit>
+  <TimeoutMs>5000</TimeoutMs>
+</HandlerRecipe>""", now_str))
+            h1_id = cur.lastrowid
+
+            cur.execute("""
+                INSERT INTO recipes (recipe_type, name, version, description, xml_content, created_at)
+                VALUES ('HANDLER', 'HDL_BETA_EVAL', 'v1.0', 'Prod_Beta 평가용 분기 핸들러', ?, ?)
+            """, ("""<HandlerRecipe>
+  <SequenceCount>1</SequenceCount>
+  <RetryLimit>2</RetryLimit>
+  <TimeoutMs>4000</TimeoutMs>
+</HandlerRecipe>""", now_str))
+            h2_id = cur.lastrowid
+
+            cur.execute("""
+                INSERT INTO recipes (recipe_type, name, version, description, xml_content, created_at)
+                VALUES ('VISION', 'VIS_ALIGN_MARK_A', 'v1.4', '1차 Fiducial Align 비전', ?, ?)
+            """, ("""<VisionRecipe>
+  <ExposureUs>2500</ExposureUs>
+  <Gain>1.35</Gain>
+  <MatchThreshold>82</MatchThreshold>
+  <LightCh1>180</LightCh1>
+</VisionRecipe>""", now_str))
+            v1_id = cur.lastrowid
+
+            cur.execute("""
+                INSERT INTO recipes (recipe_type, name, version, description, xml_content, created_at)
+                VALUES ('VISION', 'VIS_INSPECT_SURFACE', 'v3.0', '2차 표면 결함 검사 비전', ?, ?)
+            """, ("""<VisionRecipe>
+  <ExposureUs>3200</ExposureUs>
+  <Gain>1.10</Gain>
+  <DefectSensitivity>65</DefectSensitivity>
+  <MinBlobArea>12</MinBlobArea>
+</VisionRecipe>""", now_str))
+            v2_id = cur.lastrowid
+
+            cur.execute("""
+                INSERT INTO recipes (recipe_type, name, version, description, xml_content, created_at)
+                VALUES ('VISION', 'VIS_BETA_EDGE', 'v1.0', 'Beta 엣지 측정 비전', ?, ?)
+            """, ("""<VisionRecipe>
+  <ExposureUs>2800</ExposureUs>
+  <EdgeContrast>45</EdgeContrast>
+  <FilterSigma>1.5</FilterSigma>
+</VisionRecipe>""", now_str))
+            v3_id = cur.lastrowid
+
+            cur.execute("INSERT INTO handler_vision_map (handler_id, vision_id, seq_order, created_at) VALUES (?, ?, 1, ?)", (h1_id, v1_id, now_str))
+            cur.execute("INSERT INTO handler_vision_map (handler_id, vision_id, seq_order, created_at) VALUES (?, ?, 2, ?)", (h1_id, v2_id, now_str))
+            cur.execute("INSERT INTO handler_vision_map (handler_id, vision_id, seq_order, created_at) VALUES (?, ?, 1, ?)", (h2_id, v3_id, now_str))
+
+            cur.execute("""
+                INSERT INTO recipe_conditions (product, step, module, purpose, handler_id, condition_desc, created_at)
+                VALUES ('Prod_Alpha', 'Step01_Align', 'Mod_Front', 'Mass_Production', ?, '표준 양산 조건', ?)
+            """, (h1_id, now_str))
+            cur.execute("""
+                INSERT INTO recipe_conditions (product, step, module, purpose, handler_id, condition_desc, created_at)
+                VALUES ('Prod_Beta', 'Step02_Inspect', 'Mod_Rear', 'Evaluation', ?, '신규 조도 평가 조건', ?)
+            """, (h2_id, now_str))
+
+        w_cnt = cur.execute("SELECT COUNT(*) FROM work_requests").fetchone()[0]
+        if w_cnt == 0:
+            sample_todos = [
+                ("Align Fail 조치", "EQP-01 Step01 Align 조도 보정", "조도 저하로 인한 마크 인식률 하락 보정 (LightCh1 160 -> 180)", "Prod_Alpha", "Step01_Align", "EQP-01", "긴급", 1, "진행중"),
+                ("파라미터 튜닝", "VIS_INSPECT_SURFACE 민감도 재검증", "과검(False Call) 저감을 위한 MinBlobArea 10 -> 12 상향 평가", "Prod_Alpha", "Step02_Inspect", "EQP-02", "높음", 2, "평가/검증"),
+                ("횡전개", "HDL_ALPHA_MAIN v2.1 전 설비 횡전개", "EQP-01 검증 완료 후 EQP-02~04 일괄 적용 및 Diff 대조", "Prod_Alpha", "Step01_Align", "EQP-03", "보통", 3, "접수"),
+                ("신규 셋업", "Prod_Beta 신규 평가 레시피 백업", "평가 완료 후 마스터 DB 스냅샷 저장", "Prod_Beta", "Step02_Inspect", "EQP-04", "낮음", 4, "접수"),
+            ]
+            first_req_id = None
+            for r_type, title, content, prod, step, eqp, urg, p_ord, stat in sample_todos:
+                cur.execute("""
+                    INSERT INTO work_requests (req_type, title, content, product, step, equipment, urgency, priority_order, status, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (r_type, title, content, prod, step, eqp, urg, p_ord, stat, now_str, now_str))
+                if first_req_id is None:
+                    first_req_id = cur.lastrowid
+
+            cur.execute("""
+                INSERT INTO recipe_changes (request_id, target_type, target_name, change_type, before_val, after_val, change_reason, operator, evaluation_result, created_at)
+                VALUES (?, 'Vision', 'VIS_ALIGN_MARK_A', '파라미터 변경', 'LightCh1: 160 / Gain: 1.20', 'LightCh1: 180 / Gain: 1.35', '챔버 조명 노후화 보상 및 인식률 개선', '엔지니어', '양호(적용가능)', ?)
+            """, (first_req_id, now_str))
+            cur.execute("""
+                INSERT INTO recipe_changes (request_id, target_type, target_name, change_type, before_val, after_val, change_reason, operator, evaluation_result, created_at)
+                VALUES (?, 'Vision', 'VIS_INSPECT_SURFACE', '파라미터 변경', 'MinBlobArea: 10', 'MinBlobArea: 12', '미세 노이즈 과검 필터링', '엔지니어', '평가중', ?)
+            """, (first_req_id, now_str))
+            cur.execute("""
+                INSERT INTO recipe_changes (request_id, target_type, target_name, change_type, before_val, after_val, change_reason, operator, evaluation_result, created_at)
+                VALUES (?, 'Vision', 'VIS_BETA_EDGE', '신규 분기', '-', 'EdgeContrast: 45 / FilterSigma: 1.5', 'Prod_Beta 신규 평가 셋업', '엔지니어', '평가중', ?)
+            """, (first_req_id, now_str))
+
+        conn.commit()
+
+
+# ==============================================================================
+# v1.6.0 핵심 비즈니스 로직 (4대 핵심 함수 완전 구현)
+# ==============================================================================
+
+def swap_todo_priority(id_a: int, id_b: int):
+    """[기능 1] 두 할 일 항목의 priority_order 값을 서로 교환"""
+    with get_connection() as conn:
+        row_a = conn.execute("SELECT priority_order FROM work_requests WHERE id = ?", (id_a,)).fetchone()
+        row_b = conn.execute("SELECT priority_order FROM work_requests WHERE id = ?", (id_b,)).fetchone()
+        if row_a and row_b:
+            order_a = row_a["priority_order"]
+            order_b = row_b["priority_order"]
+            if order_a == order_b:
+                order_a, order_b = id_a, id_b
+            conn.execute("UPDATE work_requests SET priority_order = ?, updated_at = ? WHERE id = ?", (order_b, get_kst_str(), id_a))
+            conn.execute("UPDATE work_requests SET priority_order = ?, updated_at = ? WHERE id = ?", (order_a, get_kst_str(), id_b))
+            conn.commit()
+
+
+def update_todo_orders_by_ids(ordered_ids: list[int]):
+    """[기능 2-A] 드래그 정렬 완료된 ID 리스트 순서대로 priority_order 일괄 부여"""
+    now_str = get_kst_str()
+    with get_connection() as conn:
+        for idx, todo_id in enumerate(ordered_ids, start=1):
+            conn.execute(
+                "UPDATE work_requests SET priority_order = ?, updated_at = ? WHERE id = ?",
+                (idx, now_str, int(todo_id))
+            )
+        conn.commit()
+
+
+def reorder_todos_by_titles(ordered_titles: list[str], current_todos: list[dict]):
+    """[기능 2-B] 드래그 정렬된 키워드 리스트 기준으로 DB priority_order 재정렬"""
+    title_to_ids: dict[str, list[int]] = {}
+    for item in current_todos:
+        title_to_ids.setdefault(item["title"], []).append(int(item["id"]))
+
+    ordered_ids = []
+    for title in ordered_titles:
+        if title in title_to_ids and title_to_ids[title]:
+            ordered_ids.append(title_to_ids[title].pop(0))
+
+    if ordered_ids:
+        update_todo_orders_by_ids(ordered_ids)
+
+
+def parse_xml_key_params(xml_str: str) -> list[dict]:
+    """[기능 3] XML 문자열에서 말단(Leaf) 파라미터 태그명과 설정값을 추출"""
+    if not xml_str or not xml_str.strip():
+        return []
+    try:
+        root = ET.fromstring(xml_str.strip())
+        params = []
+        for elem in root.iter():
+            if len(elem) == 0 and elem.text and elem.text.strip():
+                params.append({
+                    "파라미터": elem.tag,
+                    "설정값": elem.text.strip()
+                })
+        return params
+    except ET.ParseError:
+        fallback = []
+        for line in xml_str.splitlines():
+            clean = line.strip()
+            if not clean:
+                continue
+            if "=" in clean:
+                k, v = clean.split("=", 1)
+                fallback.append({"파라미터": k.strip(), "설정값": v.strip()})
+            else:
+                fallback.append({"파라미터": "RAW", "설정값": clean})
+        return fallback
+
+
+def get_handler_linked_visions_detail(handler_id: int) -> list[dict]:
+    """[기능 4] Handler에 연결된 Vision 목록 + 주요 파라미터 + 최근 변경점 + Align 이미지 조회"""
+    with get_connection() as conn:
+        visions = conn.execute("""
+            SELECT v.id, v.name, v.version, v.description, v.xml_content, m.seq_order
+            FROM handler_vision_map m
+            JOIN recipes v ON m.vision_id = v.id
+            WHERE m.handler_id = ?
+            ORDER BY m.seq_order ASC, v.id ASC
+        """, (int(handler_id),)).fetchall()
+
+        results = []
+        for v in visions:
+            v_dict = dict(v)
+            v_dict["key_params"] = parse_xml_key_params(v_dict.get("xml_content", ""))
+            changes = conn.execute("""
+                SELECT id, change_type, before_val, after_val, change_reason, operator, evaluation_result, created_at
+                FROM recipe_changes
+                WHERE target_name = ? AND LOWER(target_type) = 'vision'
+                ORDER BY id DESC LIMIT 5
+            """, (v_dict["name"],)).fetchall()
+            v_dict["recent_changes"] = [dict(c) for c in changes]
+            imgs = conn.execute("""
+                SELECT id, file_name, file_path, tag, created_at
+                FROM recipe_images
+                WHERE recipe_id = ?
+                ORDER BY id DESC
+            """, (v_dict["id"],)).fetchall()
+            v_dict["images"] = [dict(im) for im in imgs]
+            results.append(v_dict)
+        return results
+
+
+# ==============================================================================
+# 할 일 (Work Requests) CRUD
+# ==============================================================================
+
+def get_todos(include_completed: bool = False) -> list[dict]:
+    query = "SELECT * FROM work_requests"
+    if not include_completed:
+        query += " WHERE status != '완료'"
+    query += " ORDER BY priority_order ASC, id DESC"
+    with get_connection() as conn:
+        rows = conn.execute(query).fetchall()
+        return [dict(r) for r in rows]
+
+
+def create_todo(
+    title: str,
+    content: str = "",
+    urgency: str = "보통",
+    req_type: str = "할 일",
+    product: str = "",
+    step: str = "",
+    equipment: str = "",
+    department: str = "",
+    requester: str = "",
+    assignee: str = "",
+    due_date: str = ""
+) -> int:
+    now_str = get_kst_str()
+    with get_connection() as conn:
+        cur = conn.cursor()
+        min_row = cur.execute("SELECT MIN(priority_order) as min_ord FROM work_requests WHERE status != '완료'").fetchone()
+        next_ord = (min_row["min_ord"] - 1) if (min_row and min_row["min_ord"] is not None and min_row["min_ord"] > 1) else 0
+
+        cur.execute("""
+            INSERT INTO work_requests (
+                req_type, title, content, product, step, equipment,
+                department, requester, assignee, urgency, priority_order, status, due_date, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '접수', ?, ?, ?)
+        """, (
+            req_type, title.strip(), content, product, step, equipment,
+            department, requester, assignee, urgency, next_ord, due_date, now_str, now_str
+        ))
+        new_id = cur.lastrowid
+        if next_ord == 0:
+            cur.execute("UPDATE work_requests SET priority_order = ? WHERE id = ?", (new_id, new_id))
+        conn.commit()
+        return int(new_id)
+
+
+def update_todo_detail(
+    todo_id: int,
+    title: str,
+    urgency: str,
+    status: str,
+    content: str,
+    product: str = "",
+    step: str = "",
+    equipment: str = "",
+    assignee: str = "",
+    due_date: str = ""
+):
+    with get_connection() as conn:
+        conn.execute("""
+            UPDATE work_requests
+            SET title = ?, urgency = ?, status = ?, content = ?,
+                product = ?, step = ?, equipment = ?, assignee = ?, due_date = ?,
+                updated_at = ?
+            WHERE id = ?
+        """, (
+            title.strip(), urgency, status, content,
+            product, step, equipment, assignee, due_date,
+            get_kst_str(), int(todo_id)
+        ))
+        conn.commit()
+
+
+def toggle_todo_complete(todo_id: int, current_status: str):
+    next_status = "진행중" if current_status == "완료" else "완료"
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE work_requests SET status = ?, updated_at = ? WHERE id = ?",
+            (next_status, get_kst_str(), int(todo_id))
+        )
+        conn.commit()
+
+
+def delete_work_request(req_id: int):
+    with get_connection() as conn:
+        atts = conn.execute("SELECT file_path FROM attachments WHERE request_id = ?", (int(req_id),)).fetchall()
+        for a in atts:
+            fp = a["file_path"]
+            if fp and os.path.exists(fp):
+                try:
+                    os.remove(fp)
+                except Exception:
+                    pass
+        conn.execute("DELETE FROM work_requests WHERE id = ?", (int(req_id),))
+        conn.commit()
+
+
+# ==============================================================================
+# 기준정보 CRUD
+# ==============================================================================
+
+def get_master_data(category: str, active_only: bool = True) -> list[dict]:
     with get_connection() as conn:
         q = "SELECT * FROM master_data WHERE category = ?"
         if active_only:
@@ -272,39 +593,53 @@ def get_master_data(category, active_only=True):
         rows = conn.execute(q, (category,)).fetchall()
         return [dict(r) for r in rows]
 
-def get_master_names(category):
-    items = get_master_data(category, active_only=True)
-    return [r['name'] for r in items]
 
-def add_master_data(category, name):
+def get_master_names(category: str) -> list[str]:
+    return [r["name"] for r in get_master_data(category, active_only=True)]
+
+
+def add_master_data(category: str, name: str) -> bool:
     if not name or not name.strip():
         return False
     with get_connection() as conn:
-        conn.execute("INSERT OR IGNORE INTO master_data (category, name) VALUES (?, ?)", (category, name.strip()))
+        conn.execute(
+            "INSERT OR IGNORE INTO master_data (category, name, created_at) VALUES (?, ?, ?)",
+            (category, name.strip(), get_kst_str())
+        )
         conn.commit()
     return True
 
-def update_master_data(item_id, new_name, is_active):
+
+def update_master_data(item_id: int, new_name: str, is_active: int):
     with get_connection() as conn:
-        conn.execute("UPDATE master_data SET name = ?, is_active = ? WHERE id = ?", (new_name.strip(), is_active, item_id))
+        conn.execute(
+            "UPDATE master_data SET name = ?, is_active = ? WHERE id = ?",
+            (new_name.strip(), int(is_active), int(item_id))
+        )
         conn.commit()
 
-def delete_master_data(item_id):
+
+def delete_master_data(item_id: int):
     with get_connection() as conn:
-        conn.execute("DELETE FROM master_data WHERE id = ?", (item_id,))
+        conn.execute("DELETE FROM master_data WHERE id = ?", (int(item_id),))
         conn.commit()
 
-# --- Code 매핑 이력 CRUD (MD-04, MD-05) ---
-def get_active_code_mapping(code):
+
+# ==============================================================================
+# Code 매핑 이력 CRUD (MD-04, MD-05)
+# ==============================================================================
+
+def get_active_code_mapping(code: str) -> dict | None:
     with get_connection() as conn:
         row = conn.execute("""
-            SELECT * FROM code_mappings 
-            WHERE code = ? AND valid_to IS NULL 
+            SELECT * FROM code_mappings
+            WHERE code = ? AND valid_to IS NULL
             ORDER BY id DESC LIMIT 1
         """, (code,)).fetchone()
         return dict(row) if row else None
 
-def get_code_mapping_history(code=None):
+
+def get_code_mapping_history(code: str = None) -> list[dict]:
     with get_connection() as conn:
         q = "SELECT * FROM code_mappings"
         params = []
@@ -315,201 +650,138 @@ def get_code_mapping_history(code=None):
         rows = conn.execute(q, params).fetchall()
         return [dict(r) for r in rows]
 
-def add_or_update_code_mapping(code, product, module, purpose, reason, certainty="확정", user="작업자"):
+
+def add_or_update_code_mapping(code: str, product: str, module: str, purpose: str, reason: str, certainty: str = "확정", user: str = "엔지니어") -> bool:
+    now_str = get_kst_str()
     with get_connection() as conn:
+        conn.execute("UPDATE code_mappings SET valid_to = ? WHERE code = ? AND valid_to IS NULL", (now_str, code))
         conn.execute("""
-            UPDATE code_mappings 
-            SET valid_to = CURRENT_TIMESTAMP 
-            WHERE code = ? AND valid_to IS NULL
-        """, (code,))
-        conn.execute("""
-            INSERT INTO code_mappings (code, product, module, purpose, reason, certainty, created_by, valid_from)
-            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        """, (code, product, module, purpose, reason, certainty, user))
-        conn.execute("INSERT OR IGNORE INTO master_data (category, name) VALUES ('DeviceCode', ?)", (code,))
+            INSERT INTO code_mappings (code, product, module, purpose, valid_from, reason, certainty, created_by, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (code, product, module, purpose, now_str, reason, certainty, user, now_str))
+        conn.execute("INSERT OR IGNORE INTO master_data (category, name, created_at) VALUES ('DeviceCode', ?, ?)", (code, now_str))
         conn.commit()
     return True
 
-def delete_code_mapping(mapping_id):
+
+def delete_code_mapping(mapping_id: int):
     with get_connection() as conn:
-        conn.execute("DELETE FROM code_mappings WHERE id = ?", (mapping_id,))
+        conn.execute("DELETE FROM code_mappings WHERE id = ?", (int(mapping_id),))
         conn.commit()
 
-# --- Recipe & 공정 조건 통합 CRUD ---
-def create_handler_recipe_with_condition(name, version, recipe_desc, xml_content, product, step, module, purpose, condition_desc):
-    """Handler Recipe 생성과 공정 조건 매핑(Description 포함)을 단일 트랜잭션으로 처리"""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO recipes (recipe_type, name, version, description, xml_content)
-            VALUES ('HANDLER', ?, ?, ?, ?)
-        """, (name.strip(), version.strip(), recipe_desc, xml_content))
-        handler_id = cursor.lastrowid
-        cursor.execute("""
-            INSERT INTO recipe_conditions (product, step, module, purpose, handler_id, condition_desc)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (product, step, module, purpose, handler_id, condition_desc.strip() if condition_desc else ""))
-        conn.commit()
-        return handler_id
 
-def create_vision_recipe(name, version, description, xml_content):
-    """공용 Vision Recipe 등록"""
-    with get_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO recipes (recipe_type, name, version, description, xml_content)
-            VALUES ('VISION', ?, ?, ?, ?)
-        """, (name.strip(), version.strip(), description, xml_content))
-        conn.commit()
-        return cursor.lastrowid
+# ==============================================================================
+# Recipe & Condition & Image CRUD
+# ==============================================================================
 
-def update_recipe(recipe_id, name, version, description, xml_content):
+def get_handlers_with_conditions(product_filter: str = "전체", step_filter: str = "전체", keyword: str = "") -> list[dict]:
+    sql = """
+        SELECT h.id, h.name, h.version, h.description, h.xml_content, h.created_at,
+               rc.id as cond_id, rc.product, rc.step, rc.module, rc.purpose, rc.condition_desc
+        FROM recipes h
+        LEFT JOIN recipe_conditions rc ON h.id = rc.handler_id
+        WHERE h.recipe_type = 'HANDLER'
+    """
+    params = []
+    if product_filter and product_filter != "전체":
+        sql += " AND rc.product = ?"
+        params.append(product_filter)
+    if step_filter and step_filter != "전체":
+        sql += " AND rc.step = ?"
+        params.append(step_filter)
+    if keyword and keyword.strip():
+        kw = f"%{keyword.strip()}%"
+        sql += " AND (h.name LIKE ? OR h.description LIKE ? OR rc.condition_desc LIKE ?)"
+        params.extend([kw, kw, kw])
+    sql += " ORDER BY h.id DESC, rc.id ASC"
+
+    with get_connection() as conn:
+        rows = conn.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+
+
+def update_recipe(recipe_id: int, name: str, version: str, description: str, xml_content: str):
     with get_connection() as conn:
         conn.execute("""
             UPDATE recipes
             SET name = ?, version = ?, description = ?, xml_content = ?
             WHERE id = ?
-        """, (name, version, description, xml_content, recipe_id))
+        """, (name.strip(), version.strip(), description, xml_content, int(recipe_id)))
         conn.commit()
 
-def update_handler_condition(handler_id, product, step, module, purpose, condition_desc):
-    with get_connection() as conn:
-        conn.execute("""
-            UPDATE recipe_conditions
-            SET product = ?, step = ?, module = ?, purpose = ?, condition_desc = ?
-            WHERE handler_id = ?
-        """, (product, step, module, purpose, condition_desc, handler_id))
-        conn.commit()
 
-def delete_recipe(recipe_id):
+def delete_recipe(recipe_id: int):
     with get_connection() as conn:
-        imgs = conn.execute("SELECT file_path FROM recipe_images WHERE recipe_id=?", (recipe_id,)).fetchall()
+        imgs = conn.execute("SELECT file_path FROM recipe_images WHERE recipe_id = ?", (int(recipe_id),)).fetchall()
         for img in imgs:
-            fp = img['file_path']
+            fp = img["file_path"]
             if fp and os.path.exists(fp):
                 try:
                     os.remove(fp)
                 except Exception:
                     pass
-        conn.execute("DELETE FROM recipes WHERE id = ?", (recipe_id,))
+        conn.execute("DELETE FROM recipes WHERE id = ?", (int(recipe_id),))
         conn.commit()
 
-def get_handlers_with_conditions():
-    """Handler 목록 및 매핑된 공정 조건, 동일 조건 내 구분 Description 반환"""
+
+def get_recipe_images(recipe_id: int) -> list[dict]:
     with get_connection() as conn:
-        rows = conn.execute("""
-            SELECT r.id, r.name, r.version, r.description as recipe_desc, r.xml_content, r.created_at,
-                   rc.id as cond_id, rc.product, rc.step, rc.module, rc.purpose, rc.condition_desc
-            FROM recipes r
-            LEFT JOIN recipe_conditions rc ON r.id = rc.handler_id
-            WHERE r.recipe_type = 'HANDLER'
-            ORDER BY rc.product, rc.step, r.name, r.id DESC
-        """).fetchall()
+        rows = conn.execute("SELECT * FROM recipe_images WHERE recipe_id = ? ORDER BY id DESC", (int(recipe_id),)).fetchall()
         return [dict(r) for r in rows]
 
-# --- Recipe Align 이미지 CRUD ---
-def get_recipe_images(recipe_id):
-    with get_connection() as conn:
-        rows = conn.execute("SELECT * FROM recipe_images WHERE recipe_id = ? ORDER BY id DESC", (recipe_id,)).fetchall()
-        return [dict(r) for r in rows]
 
-def add_recipe_image(recipe_id, file_name, file_path, tag="ALIGN"):
+def add_recipe_image(recipe_id: int, file_name: str, file_path: str, tag: str = "ALIGN"):
     with get_connection() as conn:
         conn.execute("""
-            INSERT INTO recipe_images (recipe_id, file_name, file_path, tag)
-            VALUES (?, ?, ?, ?)
-        """, (recipe_id, file_name, file_path, tag))
+            INSERT INTO recipe_images (recipe_id, file_name, file_path, tag, created_at)
+            VALUES (?, ?, ?, ?, ?)
+        """, (int(recipe_id), file_name, file_path, tag, get_kst_str()))
         conn.commit()
 
-def delete_recipe_image(image_id):
+
+def delete_recipe_image(image_id: int):
     with get_connection() as conn:
-        img = conn.execute("SELECT file_path FROM recipe_images WHERE id = ?", (image_id,)).fetchone()
-        if img and img['file_path'] and os.path.exists(img['file_path']):
+        img = conn.execute("SELECT file_path FROM recipe_images WHERE id = ?", (int(image_id),)).fetchone()
+        if img and img["file_path"] and os.path.exists(img["file_path"]):
             try:
-                os.remove(img['file_path'])
+                os.remove(img["file_path"])
             except Exception:
                 pass
-        conn.execute("DELETE FROM recipe_images WHERE id = ?", (image_id,))
+        conn.execute("DELETE FROM recipe_images WHERE id = ?", (int(image_id),))
         conn.commit()
 
-# --- 조건 매핑 / 참조 관계 삭제 ---
-def delete_recipe_condition(cond_id):
+
+def delete_recipe_condition(cond_id: int):
     with get_connection() as conn:
-        conn.execute("DELETE FROM recipe_conditions WHERE id = ?", (cond_id,))
+        conn.execute("DELETE FROM recipe_conditions WHERE id = ?", (int(cond_id),))
         conn.commit()
 
-def delete_handler_vision_map(map_id):
+
+def delete_handler_vision_map(map_id: int):
     with get_connection() as conn:
-        conn.execute("DELETE FROM handler_vision_map WHERE id = ?", (map_id,))
+        conn.execute("DELETE FROM handler_vision_map WHERE id = ?", (int(map_id),))
         conn.commit()
 
-def delete_attachment(att_id):
+
+def delete_attachment(att_id: int):
     with get_connection() as conn:
-        att = conn.execute("SELECT file_path FROM attachments WHERE id = ?", (att_id,)).fetchone()
-        if att and att['file_path'] and os.path.exists(att['file_path']):
+        att = conn.execute("SELECT file_path FROM attachments WHERE id = ?", (int(att_id),)).fetchone()
+        if att and att["file_path"] and os.path.exists(att["file_path"]):
             try:
-                os.remove(att['file_path'])
+                os.remove(att["file_path"])
             except Exception:
                 pass
-        conn.execute("DELETE FROM attachments WHERE id = ?", (att_id,))
+        conn.execute("DELETE FROM attachments WHERE id = ?", (int(att_id),))
         conn.commit()
 
-def delete_recipe_change(chg_id):
+
+def delete_recipe_change(chg_id: int):
     with get_connection() as conn:
-        conn.execute("DELETE FROM recipe_changes WHERE id = ?", (chg_id,))
+        conn.execute("DELETE FROM recipe_changes WHERE id = ?", (int(chg_id),))
         conn.commit()
 
-def delete_deployment(dep_id):
+
+def delete_deployment(dep_id: int):
     with get_connection() as conn:
-        conn.execute("DELETE FROM deployments WHERE id = ?", (dep_id,))
+        conn.execute("DELETE FROM deployments WHERE id = ?", (int(dep_id),))
         conn.commit()
-
-# --- 업무 요청 CRUD ---
-def update_work_request(req_id, req_type, title, content, product, step, equipment, department, requester, assignee):
-    with get_connection() as conn:
-        conn.execute("""
-            UPDATE work_requests 
-            SET req_type=?, title=?, content=?, product=?, step=?, equipment=?, department=?, requester=?, assignee=?, updated_at=CURRENT_TIMESTAMP
-            WHERE id=?
-        """, (req_type, title, content, product, step, equipment, department, requester, assignee, req_id))
-        conn.commit()
-
-def delete_work_request(req_id):
-    with get_connection() as conn:
-        atts = conn.execute("SELECT file_path FROM attachments WHERE request_id=?", (req_id,)).fetchall()
-        for a in atts:
-            fp = a['file_path']
-            if fp and os.path.exists(fp):
-                try:
-                    os.remove(fp)
-                except Exception:
-                    pass
-        conn.execute("DELETE FROM work_requests WHERE id = ?", (req_id,))
-        conn.commit()
-
-# --- 폴더 스캔 및 해시 추출 헬퍼 ---
-def scan_recipe_folder(folder_path):
-    file_map = {}
-    if not folder_path or not os.path.exists(folder_path) or not os.path.isdir(folder_path):
-        return file_map
-    
-    for root, _, files in os.walk(folder_path):
-        for f in files:
-            full_path = os.path.join(root, f)
-            rel_path = os.path.relpath(full_path, start=folder_path).replace("\\", "/")
-            try:
-                stat = os.stat(full_path)
-                sha256 = hashlib.sha256()
-                with open(full_path, "rb") as bf:
-                    for chunk in iter(lambda: bf.read(65536), b""):
-                        sha256.update(chunk)
-                file_map[rel_path] = {
-                    "full_path": full_path,
-                    "rel_path": rel_path,
-                    "size": stat.st_size,
-                    "hash": sha256.hexdigest(),
-                    "mtime": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-                }
-            except Exception:
-                pass
-    return file_map
