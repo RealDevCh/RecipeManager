@@ -237,7 +237,7 @@ def init_db():
 
 
 def migrate_todo_and_recipe_views():
-    """구버전(v1.0~v1.5) DB 백업 복원 시에도 무손실로 v1.6.0 컬럼을 추가"""
+    """구버전(v1.0~v1.5) DB 백업 복원 시에도 무손실로 v1.6.x 컬럼을 추가"""
     with get_connection() as conn:
         wr_cols = [row["name"] for row in conn.execute("PRAGMA table_info(work_requests)").fetchall()]
         if "urgency" not in wr_cols:
@@ -412,7 +412,7 @@ def ensure_sample_recipe_folder() -> tuple[str, str]:
 
 
 # ==============================================================================
-# v1.6.0 핵심 비즈니스 로직 (우선순위 조정 + XML 파싱 + Handler-Vision 상세)
+# 핵심 비즈니스 로직 (우선순위 조정 + XML 파싱 + Handler-Vision 상세)
 # ==============================================================================
 
 def swap_todo_priority(id_a: int, id_b: int):
@@ -834,7 +834,7 @@ def compare_folders(source_dir: str, target_dir: str) -> list[dict]:
         in_src = k in src_map
         in_tgt = k in tgt_map
         if in_src and in_tgt:
-            status = "🟢 일치" if src_map[k]["hash"] == tgt_map[k]["hash"] else "🟡 내용 변경"
+            status = "일치" if src_map[k]["hash"] == tgt_map[k]["hash"] else "내용 변경"
             results.append({
                 "파일경로": k,
                 "상태": status,
@@ -849,7 +849,7 @@ def compare_folders(source_dir: str, target_dir: str) -> list[dict]:
         elif in_src and not in_tgt:
             results.append({
                 "파일경로": k,
-                "상태": "🔴 누락 (설비에 없음)",
+                "상태": "누락 (설비에 없음)",
                 "기준크기(B)": src_map[k]["size"],
                 "설비크기(B)": 0,
                 "기준해시": src_map[k]["hash"][:12],
@@ -861,7 +861,7 @@ def compare_folders(source_dir: str, target_dir: str) -> list[dict]:
         else:
             results.append({
                 "파일경로": k,
-                "상태": "🔵 추가 (신규 파일)",
+                "상태": "추가 (신규 파일)",
                 "기준크기(B)": 0,
                 "설비크기(B)": tgt_map[k]["size"],
                 "기준해시": "-",

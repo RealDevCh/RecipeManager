@@ -1,14 +1,14 @@
-# RecipeManager v1.6.0 (통합 구조 · GitHub/모바일 배포 최적화)
+# RecipeManager v1.6.1 (MS Office Fluent 테마 & 통합 구조)
 
-`pages/` 하위 폴더 없이 **루트 디렉터리 파일 3개(`app.py`, `database.py`, `requirements.txt`)만으로 GitHub 및 Streamlit Cloud에 즉시 배포할 수 있는 통합 구조 패키지**입니다.
+불필요한 이모지를 제거하고 **MS Office 스타일의 깔끔한 엔터프라이즈 UI**와 **실시간 테마 전환 옵션**을 적용한 통합 패키지입니다.
 
-## 🚀 GitHub 웹/모바일 업로드 방법 (단 3개 파일)
-1. GitHub 저장소(`RealDevCh/RecipeManager`)에서 **`Add file` → `Upload files`** (또는 모바일에서 파일 생성)를 선택합니다.
-2. 아래 **3개 파일만** 루트 경로에 올리면 모든 기능과 샘플 데이터(`data/`, `sample_recipe_folder/`)가 실행 시 자동 생성됩니다.
-   - `app.py`
-   - `database.py`
-   - `requirements.txt`
+## 포함 테마 (좌측 사이드바에서 실시간 전환)
+1. **MS Office 블루 (기본)**: Word / Outlook 계열의 Fluent 블루 & 라이트 그레이 테마
+2. **MS Office 그린 (Excel)**: Excel 계열의 그린 포인트 & 라이트 그레이 테마
+3. **MS Office 슬레이트 (무채색)**: 차분한 다크 그레이 포인트의 무채색 업무 테마
+4. **MS Office 다크 모드**: 야간 및 암실 설비 환경용 다크 Fluent 테마
 
-## 💻 로컬 PC 실행 방법
-- **Windows**: `run.bat` 더블 클릭
-- **터미널**: `pip install -r requirements.txt && streamlit run app.py`
+## GitHub 배포 파일 (단 3개)
+- `app.py`
+- `database.py`
+- `requirements.txt`
