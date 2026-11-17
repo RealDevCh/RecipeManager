@@ -2,6 +2,7 @@ import os
 import html
 import inspect
 import calendar
+import unicodedata
 from datetime import datetime, date, timedelta
 import streamlit as st
 import pandas as pd
@@ -15,7 +16,7 @@ except ImportError:
     HAS_PASTE_BTN = False
 
 st.set_page_config(
-    page_title="RecipeManager v1.8.2",
+    page_title="RecipeManager v1.9.0",
     page_icon="⚙️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -24,55 +25,170 @@ st.set_page_config(
 db.init_db()
 
 # ==============================================================================
-# 깔끔한 업무용 스타일시트 (버튼 텍스트 셀 넘침 방지 + 달력 그리드 정돈)
+# Fluent UI 스타일시트
+# 1) 할 일 표: 단일 체크박스 + 한 줄 전체 클릭 선택(셀 단위 아님) + 콤보박스 없음
+# 2) 달력: 시안 B(풀폭 심리스 7열 격자 + 클릭 시 우측 세부정보 드로어) + 시안 C(상단 마일스톤 바)
 # ==============================================================================
 st.markdown("""
 <style>
-/* 버튼 내부 텍스트가 셀/버튼 테두리 밖으로 삐져나가지 않도록 말줄임(...) 처리 */
+/* 공통 버튼 줄바꿈 및 넘침 방지 */
 div[data-testid="stButton"] > button {
     overflow: hidden !important;
     text-overflow: ellipsis !important;
-    padding-left: 8px !important;
-    padding-right: 8px !important;
 }
 div[data-testid="stButton"] > button p {
     white-space: nowrap !important;
     overflow: hidden !important;
     text-overflow: ellipsis !important;
-    font-size: 12.5px !important;
     margin: 0 !important;
 }
 
-/* 달력 요일 헤더 */
-.cal-hdr-cell {
-    text-align: center;
-    font-weight: 700;
-    font-size: 12.5px;
-    padding: 6px 0;
-    background: #f3f2f1;
-    border: 1px solid #e1dfdd;
-    border-radius: 4px;
-    margin-bottom: 4px;
+/* [할 일 표] 전용 컨테이너: 행 간격을 좁히고 한 줄 전체를 표 행처럼 스타일링 */
+div[data-testid="stVerticalBlock"]:has(> div .rm-todo-table-marker) > div[data-testid="stHorizontalBlock"] {
+    gap: 4px !important;
+    align-items: center !important;
+    border-bottom: 1px solid #edebe9 !important;
+    padding: 2px 0 !important;
+    margin: 0 !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div .rm-todo-table-marker) div[data-testid="stButton"] > button {
+    justify-content: flex-start !important;
+    text-align: left !important;
+    border: none !important;
+    border-radius: 4px !important;
+    padding: 5px 10px !important;
+    min-height: 34px !important;
+    height: 34px !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div .rm-todo-table-marker) div[data-testid="stButton"] > button p {
+    font-family: 'D2Coding', 'Consolas', 'Malgun Gothic', monospace !important;
+    font-size: 12.5px !important;
+    white-space: pre !important;
+}
+/* 미선택 행 (secondary) */
+div[data-testid="stVerticalBlock"]:has(> div .rm-todo-table-marker) div[data-testid="stButton"] > button[kind="secondary"] {
+    background: transparent !important;
+    color: #201f1e !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div .rm-todo-table-marker) div[data-testid="stButton"] > button[kind="secondary"]:hover {
+    background: #f3f2f1 !important;
+}
+/* 선택된 행 (primary) -> 한 줄 전체 하이라이트 */
+div[data-testid="stVerticalBlock"]:has(> div .rm-todo-table-marker) div[data-testid="stButton"] > button[kind="primary"] {
+    background: #eff6fc !important;
+    color: #0f6cbd !important;
+    border-left: 3px solid #0f6cbd !important;
+    font-weight: 700 !important;
 }
 
-/* 달력 날짜 상단 바 */
-.cal-day-num {
+.rm-tbl-header {
+    background: #f3f2f1;
+    border-top: 1px solid #d2d0ce;
+    border-bottom: 1px solid #d2d0ce;
+    padding: 7px 10px;
+    font-family: 'D2Coding', 'Consolas', 'Malgun Gothic', monospace;
     font-size: 12.5px;
+    font-weight: 700;
+    color: #323130;
+    white-space: pre;
+    overflow: hidden;
+}
+.rm-match-subline {
+    font-size: 11px;
+    color: #0f6cbd;
+    background: #eff6fc;
+    padding: 1px 8px;
+    border-radius: 4px;
+    margin: 0 0 3px 44px;
+    display: inline-block;
+}
+
+/* [달력] 시안 B 스타일: 심리스(Seamless) 7열 헤어라인 그리드 & 슬림 이벤트 칩 */
+div[data-testid="stVerticalBlock"]:has(> div .rm-cal-grid-marker) > div[data-testid="stHorizontalBlock"] {
+    gap: 0px !important;
+    margin: 0 !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div .rm-cal-grid-marker) > div[data-testid="stHorizontalBlock"] > div[data-testid="column"],
+div[data-testid="stVerticalBlock"]:has(> div .rm-cal-grid-marker) > div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {
+    border-right: 1px solid #e1dfdd !important;
+    border-bottom: 1px solid #e1dfdd !important;
+    padding: 5px 6px !important;
+    min-height: 112px !important;
+    background: #ffffff !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div .rm-cal-grid-marker) > div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:first-child,
+div[data-testid="stVerticalBlock"]:has(> div .rm-cal-grid-marker) > div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:first-child {
+    border-left: 1px solid #e1dfdd !important;
+}
+/* 달력 셀 내부의 일정 칩 버튼 */
+div[data-testid="stVerticalBlock"]:has(> div .rm-cal-grid-marker) div[data-testid="stButton"] > button {
+    min-height: 23px !important;
+    height: 23px !important;
+    padding: 1px 6px !important;
+    border-radius: 3px !important;
+    justify-content: flex-start !important;
+    text-align: left !important;
+    margin-bottom: 2px !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div .rm-cal-grid-marker) div[data-testid="stButton"] > button p {
+    font-size: 11.5px !important;
+    line-height: 1.2 !important;
+}
+/* 일반 실행 일정 칩 (secondary) */
+div[data-testid="stVerticalBlock"]:has(> div .rm-cal-grid-marker) div[data-testid="stButton"] > button[kind="secondary"] {
+    background: #f0fdf4 !important;
+    color: #1e4620 !important;
+    border: none !important;
+    border-left: 3px solid #107c10 !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div .rm-cal-grid-marker) div[data-testid="stButton"] > button[kind="secondary"]:hover {
+    background: #dcfce7 !important;
+}
+/* 큰 납기 / 긴급 강조 일정 칩 (primary) */
+div[data-testid="stVerticalBlock"]:has(> div .rm-cal-grid-marker) div[data-testid="stButton"] > button[kind="primary"] {
+    background: #ebf8ff !important;
+    color: #0f6cbd !important;
+    border: none !important;
+    border-left: 3px solid #0f6cbd !important;
+    font-weight: 700 !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div .rm-cal-grid-marker) div[data-testid="stButton"] > button[kind="primary"]:hover {
+    background: #dbeafe !important;
+}
+
+.rm-cal-dow-bar {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    border: 1px solid #e1dfdd;
+    background: #f8f9fa;
+    border-radius: 6px 6px 0 0;
+}
+.rm-cal-dow-item {
+    text-align: center;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 7px 0;
+    border-right: 1px solid #e1dfdd;
+}
+.rm-cal-dow-item:last-child {
+    border-right: none;
+}
+.cal-day-num {
+    font-size: 12px;
     font-weight: 700;
     color: #323130;
     margin-bottom: 4px;
 }
 .cal-day-muted {
-    font-size: 12px;
-    font-weight: 500;
+    font-size: 11.5px;
     color: #a19f9d;
     margin-bottom: 4px;
 }
-.cal-today-pill {
+.cal-today-badge {
     display: inline-block;
     background: #0f6cbd;
     color: #ffffff;
-    font-size: 11.5px;
+    font-size: 11px;
     font-weight: 700;
     padding: 1px 7px;
     border-radius: 10px;
@@ -82,7 +198,76 @@ div[data-testid="stButton"] > button p {
 """, unsafe_allow_html=True)
 
 SUPPORTS_ACCEPT_NEW = "accept_new_options" in inspect.signature(st.selectbox).parameters
-SUPPORTS_EDITOR_SELECT = "on_select" in inspect.signature(st.data_editor).parameters
+
+
+def display_width(text: str) -> int:
+    """한글/이모지(폭 2)와 영문/숫자(폭 1)의 시각적 출력 폭 계산"""
+    w = 0
+    for ch in str(text):
+        ea = unicodedata.east_asian_width(ch)
+        w += 2 if ea in ("W", "F") else 1
+    return w
+
+
+def pad_display(text: str, target_width: int, align: str = "left") -> str:
+    """시각적 출력 폭(target_width)에 맞춰 정확히 자르거나 공백 채우기"""
+    s = str(text or "")
+    cur_w = 0
+    out_chars = []
+    for ch in s:
+        cw = 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+        if cur_w + cw > target_width:
+            if target_width >= 2 and out_chars:
+                # 마지막 글자를 말줄임표(…)로 교체
+                last_w = 2 if unicodedata.east_asian_width(out_chars[-1]) in ("W", "F") else 1
+                out_chars.pop()
+                cur_w -= last_w
+                if cur_w + 2 <= target_width:
+                    out_chars.append("…")
+                    cur_w += 2
+            break
+        out_chars.append(ch)
+        cur_w += cw
+
+    trimmed = "".join(out_chars)
+    pad_len = max(0, target_width - cur_w)
+    if align == "right":
+        return (" " * pad_len) + trimmed
+    if align == "center":
+        left_p = pad_len // 2
+        return (" " * left_p) + trimmed + (" " * (pad_len - left_p))
+    return trimmed + (" " * pad_len)
+
+
+def format_todo_table_header() -> str:
+    return (
+        f"{pad_display('순서', 4, 'center')} │ "
+        f"{pad_display('긴급', 6, 'center')} │ "
+        f"{pad_display('할 일 키워드 (한 줄 클릭 시 우측 상세)', 32, 'left')} │ "
+        f"{pad_display('목표기한', 10, 'center')} │ "
+        f"{pad_display('담당자', 6, 'center')} │ "
+        f"{pad_display('상태', 8, 'center')}"
+    )
+
+
+def format_todo_table_row(idx: int, t: dict, id_to_title: dict) -> str:
+    p_tag = f"[{id_to_title[t['parent_id']]}] " if t.get("parent_id") in id_to_title else ""
+    lvl_icon = "🎯" if t.get("task_level") == "납기(큰일)" else "⚡"
+    urg_map = {"긴급": "🔴긴급", "높음": "🟠높음", "보통": "🔵보통", "낮음": "⚪낮음"}
+    urg_str = urg_map.get(t.get("urgency") or "보통", "🔵보통")
+    title_str = f"{lvl_icon}{p_tag}{t['title']}"
+    due_str = (t.get("due_date") or "-")[:10]
+    asg_str = t.get("assignee") or "유철형"
+    stat_str = t.get("status") or "접수"
+
+    return (
+        f"{pad_display(f'{idx:02d}', 4, 'center')} │ "
+        f"{pad_display(urg_str, 6, 'left')} │ "
+        f"{pad_display(title_str, 32, 'left')} │ "
+        f"{pad_display(due_str, 10, 'center')} │ "
+        f"{pad_display(asg_str, 6, 'center')} │ "
+        f"{pad_display(stat_str, 8, 'center')}"
+    )
 
 
 def smart_combobox(
@@ -134,9 +319,9 @@ def parse_date_safe(d_str: str | None) -> date:
 
 
 # ==============================================================================
-# 공통 세부정보 편집 폼 렌더러 (표 우측 패널 & 달력 상세 모달 공용)
+# 공통 세부정보 편집 폼 렌더러 (표 우측 패널 & 달력 우측 슬라이드 드로어 공용)
 # ==============================================================================
-def render_todo_detail_editor(sel_id: int, key_prefix: str = "ed", in_dialog: bool = False):
+def render_todo_detail_editor(sel_id: int, key_prefix: str = "ed", show_close_btn: bool = False):
     detail = db.get_todo_by_id(sel_id)
     if not detail:
         st.info("선택된 항목을 찾을 수 없습니다.")
@@ -149,8 +334,13 @@ def render_todo_detail_editor(sel_id: int, key_prefix: str = "ed", in_dialog: bo
     }
     milestone_id_to_label = {v: k for k, v in milestone_label_to_id.items()}
 
-    # 상단 빠른 액션 바 (완료/복구 + 삭제)
-    act_c1, act_c2 = st.columns([7, 3])
+    # 상단 빠른 액션 바 (완료/복구 + 삭제 + [달력 드로어일 경우 닫기])
+    if show_close_btn:
+        act_c1, act_c2, act_c3 = st.columns([5.2, 2.6, 2.2])
+    else:
+        act_c1, act_c2 = st.columns([7, 3])
+        act_c3 = None
+
     with act_c1:
         is_done = detail["status"] == "완료"
         if st.button(
@@ -168,12 +358,18 @@ def render_todo_detail_editor(sel_id: int, key_prefix: str = "ed", in_dialog: bo
                 db.delete_work_request(sel_id)
                 if st.session_state.get("selected_todo_id") == sel_id:
                     st.session_state["selected_todo_id"] = None
-                if "checked_todo_ids" in st.session_state:
-                    st.session_state["checked_todo_ids"].discard(sel_id)
-                st.session_state["todo_order_rev"] = st.session_state.get("todo_order_rev", 0) + 1
+                if st.session_state.get("checked_todo_id") == sel_id:
+                    st.session_state["checked_todo_id"] = None
+                if st.session_state.get("cal_selected_todo_id") == sel_id:
+                    st.session_state["cal_selected_todo_id"] = None
+                st.rerun()
+    if act_c3 is not None:
+        with act_c3:
+            if st.button("✕ 닫기", use_container_width=True, key=f"{key_prefix}_drawer_close_{sel_id}"):
+                st.session_state["cal_selected_todo_id"] = None
                 st.rerun()
 
-    with st.container(border=not in_dialog):
+    with st.container(border=True):
         st.markdown(f"#### 🔍 #{detail['id']} 세부 정보")
         st.caption(
             f"등록일시: **{detail.get('created_at') or '-'}** | "
@@ -283,7 +479,7 @@ def render_todo_detail_editor(sel_id: int, key_prefix: str = "ed", in_dialog: bo
         e_content = st.text_area(
             "세부 내용",
             value=detail.get("content") or "",
-            height=95,
+            height=90,
             key=f"{key_prefix}_cnt_{sel_id}"
         )
 
@@ -326,45 +522,31 @@ def render_todo_detail_editor(sel_id: int, key_prefix: str = "ed", in_dialog: bo
                     db.save_todo_attachments(sel_id, pasted_images=[p_add.image_data])
                     st.rerun()
 
-        save_c1, save_c2 = st.columns([7, 3] if in_dialog else [10, 0.01])
-        with save_c1:
-            if st.button("💾 수정사항 저장", type="primary", use_container_width=True, key=f"{key_prefix}_save_{sel_id}"):
-                if not e_title:
-                    st.error("키워드(제목)를 입력해 주세요.")
-                else:
-                    db.update_todo_detail(
-                        todo_id=sel_id,
-                        title=e_title,
-                        urgency=e_urg or "보통",
-                        status=e_stat,
-                        content=e_content,
-                        product=e_prod,
-                        step=e_step,
-                        equipment=e_eqp,
-                        department=e_dept,
-                        requester=e_req,
-                        assignee=e_asg or "유철형",
-                        lot_id=e_lot,
-                        due_date=e_due.strftime("%Y-%m-%d"),
-                        task_level=e_level,
-                        parent_id=e_parent_id
-                    )
-                    if more_files:
-                        db.save_todo_attachments(sel_id, uploaded_files=more_files)
-                    st.success("저장되었습니다.")
-                    st.rerun()
-        if in_dialog:
-            with save_c2:
-                if st.button("닫기", use_container_width=True, key=f"{key_prefix}_close_{sel_id}"):
-                    st.rerun()
-
-
-# ==============================================================================
-# 달력 일정 클릭 시 열리는 세부정보 모달 (@st.dialog)
-# ==============================================================================
-@st.dialog("📋 일정 세부 정보 및 수정", width="large")
-def open_calendar_detail_dialog(todo_id: int):
-    render_todo_detail_editor(todo_id, key_prefix="cal_dlg", in_dialog=True)
+        if st.button("💾 수정사항 저장", type="primary", use_container_width=True, key=f"{key_prefix}_save_{sel_id}"):
+            if not e_title:
+                st.error("키워드(제목)를 입력해 주세요.")
+            else:
+                db.update_todo_detail(
+                    todo_id=sel_id,
+                    title=e_title,
+                    urgency=e_urg or "보통",
+                    status=e_stat,
+                    content=e_content,
+                    product=e_prod,
+                    step=e_step,
+                    equipment=e_eqp,
+                    department=e_dept,
+                    requester=e_req,
+                    assignee=e_asg or "유철형",
+                    lot_id=e_lot,
+                    due_date=e_due.strftime("%Y-%m-%d"),
+                    task_level=e_level,
+                    parent_id=e_parent_id
+                )
+                if more_files:
+                    db.save_todo_attachments(sel_id, uploaded_files=more_files)
+                st.success("저장되었습니다.")
+                st.rerun()
 
 
 # ==============================================================================
@@ -532,7 +714,6 @@ def open_new_todo_dialog():
                 )
                 st.session_state["dlg_pasted_imgs"] = []
                 st.session_state["selected_todo_id"] = new_id
-                st.session_state["todo_order_rev"] = st.session_state.get("todo_order_rev", 0) + 1
                 st.rerun()
     with btn_c2:
         if st.button("닫기", use_container_width=True, key="dlg_close_btn"):
@@ -544,7 +725,7 @@ def open_new_todo_dialog():
 # 사이드바 내비게이션
 # ==============================================================================
 with st.sidebar:
-    st.markdown("## ⚙️ RecipeManager `v1.8.2`")
+    st.markdown("## ⚙️ RecipeManager `v1.9.0`")
     st.caption("반도체 검사·계측 실무 통합 워크스페이스")
 
     menu = st.radio(
@@ -575,13 +756,11 @@ with st.sidebar:
 
 
 # ==============================================================================
-# [메인 1] ✅ 할 일 (스프레드시트 표 + 표 위 우선순위 이동 + 전방위 검색 + 달력)
+# [메인 1] ✅ 할 일
 # ==============================================================================
 if menu == "✅ 할 일":
-    if "checked_todo_ids" not in st.session_state:
-        st.session_state["checked_todo_ids"] = set()
-    if "todo_order_rev" not in st.session_state:
-        st.session_state["todo_order_rev"] = 0
+    if "checked_todo_id" not in st.session_state:
+        st.session_state["checked_todo_id"] = None
 
     top_c1, top_c2, top_c3 = st.columns([4.2, 3.8, 2.0])
     with top_c1:
@@ -601,7 +780,7 @@ if menu == "✅ 할 일":
     id_to_title = {t["id"]: t["title"] for t in all_todos}
 
     # --------------------------------------------------------------------------
-    # [뷰 1] 실제 스프레드시트 표(st.data_editor) + 표 위 우선순위 조정 + 행 클릭 상세
+    # [뷰 1] 할 일 표 (단일 체크박스 우선순위 이동 + 한 줄 클릭 우측 상세 + 하단 콤보박스 없음)
     # --------------------------------------------------------------------------
     if view_mode == "📋 표 목록 + 세부정보":
         f_c1, f_c2, f_c3 = st.columns([2.3, 3.7, 4.0])
@@ -629,42 +808,41 @@ if menu == "✅ 할 일":
         todos = db.filter_todos_by_query(base_todos, search_kw)
         visible_ids = [t["id"] for t in todos]
 
-        st.session_state["checked_todo_ids"] = {
-            cid for cid in st.session_state["checked_todo_ids"] if cid in visible_ids
-        }
-        checked_set = st.session_state["checked_todo_ids"]
+        # 단일 체크 ID가 현재 목록에 없으면 초기화
+        checked_id = st.session_state.get("checked_todo_id")
+        if checked_id not in visible_ids:
+            checked_id = None
+            st.session_state["checked_todo_id"] = None
 
         col_tbl, col_detail = st.columns([5.8, 4.2])
 
         with col_tbl:
             # 표 바로 위 우선순위 조정 버튼 바
             prio_c1, prio_c2, prio_c3, prio_c4, prio_c5 = st.columns([1.4, 1.5, 1.5, 1.3, 4.3])
-            has_checked = len(checked_set) > 0
+            has_checked = checked_id is not None
             with prio_c1:
                 if st.button("▲ 위", disabled=not has_checked, use_container_width=True, help="체크한 항목을 위로 한 칸 이동"):
-                    if db.move_checked_todos(visible_ids, checked_set, "up"):
-                        st.session_state["todo_order_rev"] += 1
+                    if db.move_single_checked_todo(visible_ids, checked_id, "up"):
                         st.rerun()
             with prio_c2:
                 if st.button("▼ 아래", disabled=not has_checked, use_container_width=True, help="체크한 항목을 아래로 한 칸 이동"):
-                    if db.move_checked_todos(visible_ids, checked_set, "down"):
-                        st.session_state["todo_order_rev"] += 1
+                    if db.move_single_checked_todo(visible_ids, checked_id, "down"):
                         st.rerun()
             with prio_c3:
                 if st.button("⏫ 맨위", disabled=not has_checked, use_container_width=True, help="체크한 항목을 맨 위로 이동"):
-                    if db.move_checked_todos(visible_ids, checked_set, "top"):
-                        st.session_state["todo_order_rev"] += 1
+                    if db.move_single_checked_todo(visible_ids, checked_id, "top"):
                         st.rerun()
             with prio_c4:
-                if st.button("해제", disabled=not has_checked, use_container_width=True, help="체크 전체 해제"):
-                    st.session_state["checked_todo_ids"] = set()
-                    st.session_state["todo_order_rev"] += 1
+                if st.button("해제", disabled=not has_checked, use_container_width=True, help="체크 해제"):
+                    st.session_state["checked_todo_id"] = None
+                    for tid in visible_ids:
+                        st.session_state[f"single_chk_{tid}"] = False
                     st.rerun()
             with prio_c5:
                 if has_checked:
-                    st.caption(f"✅ **{len(checked_set)}개** 체크됨 — 위/아래 이동 시 체크 상태 유지")
+                    st.caption(f"✅ **#{checked_id}** 선택됨 — 위/아래 이동 시 체크 유지")
                 else:
-                    st.caption("☑️ 이동 체크: 순서 조정 · 행 클릭: 우측 세부정보 표시")
+                    st.caption("☑️ 좌측 체크(1개): 순서 이동 · 한 줄 클릭: 우측 상세")
 
             if not todos:
                 st.info("조건에 일치하는 할 일이 없습니다. 검색어를 지우거나 [➕ 새 할 일 등록]으로 추가하세요.")
@@ -674,122 +852,75 @@ if menu == "✅ 할 일":
                     cur_sel_id = visible_ids[0]
                     st.session_state["selected_todo_id"] = cur_sel_id
 
-                urg_badge_map = {
-                    "긴급": "🔴 긴급",
-                    "높음": "🟠 높음",
-                    "보통": "🔵 보통",
-                    "낮음": "⚪ 낮음",
-                }
+                # 표 컨테이너 (CSS 마커로 각 행을 한 줄 그리드로 결합)
+                with st.container():
+                    st.markdown("<div class='rm-todo-table-marker'></div>", unsafe_allow_html=True)
 
-                table_rows = []
-                for idx, t in enumerate(todos, start=1):
-                    tid = t["id"]
-                    p_tag = f"[{id_to_title[t['parent_id']]}] " if t.get("parent_id") in id_to_title else ""
-                    is_big = (t.get("task_level") == "납기(큰일)")
-                    urg_val = t.get("urgency") or "보통"
-                    match_note = f"  (🔎 {' · '.join(t['_match_reasons'])})" if t.get("_match_reasons") else ""
-                    sel_prefix = "▶ " if tid == cur_sel_id else ""
+                    # 헤더 행
+                    h_c1, h_c2 = st.columns([0.55, 9.45])
+                    h_c1.markdown("<div class='rm-tbl-header' style='text-align:center;padding-left:0;padding-right:0;'>이동</div>", unsafe_allow_html=True)
+                    h_c2.markdown(f"<div class='rm-tbl-header'>{html.escape(format_todo_table_header())}</div>", unsafe_allow_html=True)
 
-                    table_rows.append({
-                        "이동": tid in checked_set,
-                        "순서": idx,
-                        "긴급도": urg_badge_map.get(urg_val, f"🔵 {urg_val}"),
-                        "구분": "🎯 큰납기" if is_big else "⚡ 실행",
-                        "할 일 키워드": f"{sel_prefix}{p_tag}{t['title']}{match_note}",
-                        "목표기한": t.get("due_date") or "-",
-                        "담당자": t.get("assignee") or "유철형",
-                        "상태": t.get("status") or "접수",
-                    })
+                    # 데이터 행 (1줄 = 단일 체크박스 + 전체 한 줄 클릭 버튼)
+                    for idx, t in enumerate(todos, start=1):
+                        tid = t["id"]
+                        is_selected_row = (tid == cur_sel_id)
+                        r_c1, r_c2 = st.columns([0.55, 9.45])
 
-                df_table = pd.DataFrame(table_rows)
+                        # 단일 선택 체크박스 (하나만 체크되도록 강제)
+                        with r_c1:
+                            chk_key = f"single_chk_{tid}"
+                            st.session_state[chk_key] = (checked_id == tid)
+                            new_val = st.checkbox("이동선택", key=chk_key, label_visibility="collapsed")
+                            if new_val and checked_id != tid:
+                                # 다른 항목의 체크를 모두 해제하고 현재 항목만 체크 유지
+                                for other_id in visible_ids:
+                                    if other_id != tid:
+                                        st.session_state[f"single_chk_{other_id}"] = False
+                                st.session_state["checked_todo_id"] = tid
+                                st.rerun()
+                            elif not new_val and checked_id == tid:
+                                st.session_state["checked_todo_id"] = None
+                                st.rerun()
 
-                editor_kwargs = dict(
-                    data=df_table,
-                    use_container_width=True,
-                    hide_index=True,
-                    key=f"todo_grid_{st.session_state['todo_order_rev']}",
-                    column_config={
-                        "이동": st.column_config.CheckboxColumn("이동", width="small"),
-                        "순서": st.column_config.NumberColumn("순서", format="%d", disabled=True, width="small"),
-                        "긴급도": st.column_config.TextColumn("긴급도", disabled=True, width="small"),
-                        "구분": st.column_config.TextColumn("구분", disabled=True, width="small"),
-                        "할 일 키워드": st.column_config.TextColumn("할 일 키워드", disabled=True, width="large"),
-                        "목표기한": st.column_config.TextColumn("목표기한", disabled=True, width="small"),
-                        "담당자": st.column_config.TextColumn("담당자", disabled=True, width="small"),
-                        "상태": st.column_config.TextColumn("상태", disabled=True, width="small"),
-                    }
-                )
-                if SUPPORTS_EDITOR_SELECT:
-                    editor_kwargs["on_select"] = "rerun"
-                    editor_kwargs["selection_mode"] = "single-row"
+                        # 한 줄 전체 클릭 버튼 (셀 단위가 아닌 항목 한 줄 전체 선택 -> 우측 상세 연동)
+                        with r_c2:
+                            row_label = format_todo_table_row(idx, t, id_to_title)
+                            tooltip_txt = f"#{tid} {t['title']} | 부서: {t.get('department') or '-'} | 의뢰자: {t.get('requester') or '-'} | Lot: {t.get('lot_id') or '-'}"
+                            if st.button(
+                                row_label,
+                                key=f"todo_fullrow_{tid}",
+                                type="primary" if is_selected_row else "secondary",
+                                use_container_width=True,
+                                help=tooltip_txt
+                            ):
+                                st.session_state["selected_todo_id"] = tid
+                                st.rerun()
 
-                editor_out = st.data_editor(**editor_kwargs)
+                        if t.get("_match_reasons"):
+                            reasons_str = html.escape(" · ".join(t["_match_reasons"]))
+                            st.markdown(f"<div class='rm-match-subline'>🔎 {reasons_str}</div>", unsafe_allow_html=True)
 
-                need_rerun = False
-                if isinstance(editor_out, dict):
-                    edited_rows = editor_out.get("edited_rows", {})
-                    if edited_rows:
-                        updated_checked = set(checked_set)
-                        for r_idx_str, changes in edited_rows.items():
-                            r_idx = int(r_idx_str)
-                            if "이동" in changes and 0 <= r_idx < len(visible_ids):
-                                target_tid = visible_ids[r_idx]
-                                if changes["이동"]:
-                                    updated_checked.add(target_tid)
-                                else:
-                                    updated_checked.discard(target_tid)
-                        if updated_checked != checked_set:
-                            st.session_state["checked_todo_ids"] = updated_checked
-                            need_rerun = True
-
-                    sel_rows = editor_out.get("selection", {}).get("rows", [])
-                    if sel_rows and sel_rows != st.session_state.get("last_editor_sel_rows"):
-                        st.session_state["last_editor_sel_rows"] = list(sel_rows)
-                        clicked_idx = sel_rows[0]
-                        if 0 <= clicked_idx < len(visible_ids):
-                            st.session_state["selected_todo_id"] = visible_ids[clicked_idx]
-                            need_rerun = True
-                elif isinstance(editor_out, pd.DataFrame):
-                    new_checked = {
-                        visible_ids[i]
-                        for i in range(len(editor_out))
-                        if bool(editor_out.iloc[i]["이동"])
-                    }
-                    if new_checked != checked_set:
-                        st.session_state["checked_todo_ids"] = new_checked
-                        need_rerun = True
-
-                if need_rerun:
-                    st.rerun()
-
-                if not SUPPORTS_EDITOR_SELECT:
-                    picked_t = st.selectbox(
-                        "세부정보 볼 항목 선택",
-                        todos,
-                        index=visible_ids.index(cur_sel_id),
-                        format_func=lambda x: f"#{x['id']} {x['title']}"
-                    )
-                    if picked_t and picked_t["id"] != cur_sel_id:
-                        st.session_state["selected_todo_id"] = picked_t["id"]
-                        st.rerun()
-
-        # 우측 세부정보 패널
+        # 우측 세부정보 패널 (항목 선택 시 오른쪽에 즉시 표시)
         with col_detail:
             sel_id = st.session_state.get("selected_todo_id")
             if sel_id and sel_id in visible_ids:
-                render_todo_detail_editor(sel_id, key_prefix="tbl_ed", in_dialog=False)
+                render_todo_detail_editor(sel_id, key_prefix="tbl_ed", show_close_btn=False)
             else:
-                st.info("좌측 표에서 할 일 행을 클릭하면 세부 정보가 표시됩니다.")
+                st.info("좌측 표에서 할 일 한 줄을 클릭하면 오른쪽에 세부 정보가 표시됩니다.")
 
     # --------------------------------------------------------------------------
-    # [뷰 2] 📅 달력 UI (상단 마일스톤 로드맵 바 + 깔끔한 월/주/일 달력 + 클릭 상세)
+    # [뷰 2] 📅 달력 UI (시안 B 풀폭 심리스 격자 + 우측 드로어 & 시안 C 상단 마일스톤 바)
     # --------------------------------------------------------------------------
     else:
         if "cal_ref_date" not in st.session_state:
             st.session_state["cal_ref_date"] = db.get_kst_today()
         if "cal_selected_milestone_id" not in st.session_state:
             st.session_state["cal_selected_milestone_id"] = None
+        if "cal_selected_todo_id" not in st.session_state:
+            st.session_state["cal_selected_todo_id"] = None
 
+        # 1) 시안 C 요소: 상단 마일스톤 로드맵 바 (큰 납기 진행률 카드 & 클릭 필터)
         milestones = [t for t in all_todos if t.get("task_level") == "납기(큰일)"]
         if milestones:
             st.markdown("##### 🎯 상위 프로젝트 · 큰 납기 로드맵 (클릭 시 해당 프로젝트 일정만 달력에 필터링)")
@@ -831,7 +962,7 @@ if menu == "✅ 할 일":
 
         st.divider()
 
-        # 달력 제어 툴바
+        # 2) 달력 상단 제어 바
         cal_r1_c1, cal_r1_c2, cal_r1_c3 = st.columns([3.5, 4.0, 2.5])
         with cal_r1_c1:
             cal_scope = st.radio(
@@ -902,94 +1033,133 @@ if menu == "✅ 할 일":
 
         today_dt = db.get_kst_today()
         today_str = today_dt.strftime("%Y-%m-%d")
-        st.caption("💡 달력의 일정 카드를 클릭하면 세부정보 창이 열려 바로 수정·완료 처리할 수 있습니다.")
 
-        def render_day_cell_items(d_str: str, key_scope: str, detailed: bool = False):
-            items = events_by_date.get(d_str, [])
-            if not items:
-                st.markdown("<div style='height:26px;'></div>", unsafe_allow_html=True)
-                return
-            for it in items:
-                is_m = (it.get("task_level") == "납기(큰일)")
-                p_tag = f"[{id_to_title[it['parent_id']]}] " if it.get("parent_id") in id_to_title else ""
-                done_mark = "✓ " if it["status"] == "완료" else ""
-                urg_mark = "🔴 " if (it.get("urgency") == "긴급" and it["status"] != "완료") else ""
-                prefix = "🎯 " if is_m else f"▸ {p_tag}"
-                btn_label = f"{done_mark}{urg_mark}{prefix}{it['title']}"
+        # 3) 시안 B 레이아웃: 미선택 시 100% 풀폭, 일정 클릭 시 우측 세부정보 드로어 오픈
+        cal_drawer_id = st.session_state.get("cal_selected_todo_id")
+        if cal_drawer_id and not any(t["id"] == cal_drawer_id for t in all_todos):
+            cal_drawer_id = None
+            st.session_state["cal_selected_todo_id"] = None
 
-                if st.button(
-                    btn_label,
-                    key=f"cal_ev_{key_scope}_{d_str}_{it['id']}",
-                    type="primary" if (is_m and it["status"] != "완료") else "secondary",
-                    use_container_width=True,
-                    help=f"{it['title']} (담당: {it.get('assignee') or '유철형'} / 기한: {d_str})"
-                ):
-                    open_calendar_detail_dialog(it["id"])
+        if cal_drawer_id:
+            cal_main_col, cal_drawer_col = st.columns([6.4, 3.6])
+        else:
+            cal_main_col = st.container()
+            cal_drawer_col = None
 
-                if detailed:
-                    meta_parts = [
-                        x for x in [
-                            f"부서: {it['department']}" if it.get("department") else "",
-                            f"의뢰자: {it['requester']}" if it.get("requester") else "",
-                            f"Lot: {it['lot_id']}" if it.get("lot_id") else "",
-                            f"담당: {it['assignee']}" if it.get("assignee") else "",
-                            f"상태: {it['status']}"
-                        ] if x
-                    ]
-                    st.caption(" | ".join(meta_parts))
-                elif it.get("_match_reasons"):
-                    st.caption(f"🔎 {' · '.join(it['_match_reasons'])}")
+        with cal_main_col:
+            st.caption("💡 일정 칩을 클릭하면 우측에 세부정보 패널이 열립니다.")
 
-        if cal_scope == "일간 (Day)":
-            d_str = ref_date.strftime("%Y-%m-%d")
-            day_names = ["월", "화", "수", "목", "금", "토", "일"]
-            st.markdown(f"#### 📅 {ref_date.year}년 {ref_date.month}월 {ref_date.day}일 ({day_names[ref_date.weekday()]})")
-            with st.container(border=True):
-                render_day_cell_items(d_str, key_scope="day", detailed=True)
+            def render_day_cell_items(d_str: str, key_scope: str, detailed: bool = False):
+                items = events_by_date.get(d_str, [])
+                if not items:
+                    return
+                for it in items:
+                    is_m = (it.get("task_level") == "납기(큰일)")
+                    is_urg = (it.get("urgency") == "긴급" and it["status"] != "완료")
+                    p_tag = f"[{id_to_title[it['parent_id']]}] " if it.get("parent_id") in id_to_title else ""
+                    done_mark = "✓ " if it["status"] == "완료" else ""
+                    urg_mark = "🔴 " if is_urg else ""
+                    prefix = "🎯 " if is_m else f"▸ {p_tag}"
+                    btn_label = f"{done_mark}{urg_mark}{prefix}{it['title']}"
 
-        elif cal_scope == "주간 (Week)":
-            start_week = ref_date - timedelta(days=ref_date.weekday())
-            end_week = start_week + timedelta(days=6)
-            st.markdown(f"#### 📅 {start_week.year}년 {start_week.month}월 {start_week.day}일 ~ {end_week.month}월 {end_week.day}일")
-            w_cols = st.columns(7, gap="small")
-            day_names = ["월", "화", "수", "목", "금", "토", "일"]
-            for i in range(7):
-                cur_d = start_week + timedelta(days=i)
-                d_str = cur_d.strftime("%Y-%m-%d")
-                is_today = (d_str == today_str)
-                with w_cols[i]:
-                    with st.container(border=True):
-                        if is_today:
-                            st.markdown(f"<span class='cal-today-pill'>{cur_d.month}/{cur_d.day} ({day_names[i]}) 오늘</span>", unsafe_allow_html=True)
-                        else:
-                            st.markdown(f"<div class='cal-day-num'>{cur_d.month}/{cur_d.day} ({day_names[i]})</div>", unsafe_allow_html=True)
-                        render_day_cell_items(d_str, key_scope="week", detailed=False)
+                    if st.button(
+                        btn_label,
+                        key=f"cal_ev_{key_scope}_{d_str}_{it['id']}",
+                        type="primary" if ((is_m or is_urg) and it["status"] != "완료") else "secondary",
+                        use_container_width=True,
+                        help=f"{it['title']} (담당: {it.get('assignee') or '유철형'} / 기한: {d_str})"
+                    ):
+                        st.session_state["cal_selected_todo_id"] = it["id"]
+                        st.rerun()
 
-        else:  # 월간 (Month) - 전월/익월 날짜까지 7열 그리드 완전 채움
-            st.markdown(f"#### 📅 {ref_date.year}년 {ref_date.month}월")
-            cal_weeks = calendar.Calendar(firstweekday=0).monthdatescalendar(ref_date.year, ref_date.month)
-            headers = st.columns(7, gap="small")
-            for idx, dn in enumerate(["월", "화", "수", "목", "금", "토", "일"]):
-                color = "#a4262c" if idx == 6 else ("#0f6cbd" if idx == 5 else "#323130")
-                headers[idx].markdown(
-                    f"<div class='cal-hdr-cell' style='color:{color};'>{dn}</div>",
-                    unsafe_allow_html=True
-                )
-            for week_dates in cal_weeks:
-                cols = st.columns(7, gap="small")
-                for idx, cell_date in enumerate(week_dates):
-                    d_str = cell_date.strftime("%Y-%m-%d")
-                    is_cur_month = (cell_date.month == ref_date.month)
-                    is_today = (d_str == today_str)
-                    with cols[idx]:
-                        with st.container(border=True):
+                    if detailed:
+                        meta_parts = [
+                            x for x in [
+                                f"부서: {it['department']}" if it.get("department") else "",
+                                f"의뢰자: {it['requester']}" if it.get("requester") else "",
+                                f"Lot: {it['lot_id']}" if it.get("lot_id") else "",
+                                f"담당: {it['assignee']}" if it.get("assignee") else "",
+                                f"상태: {it['status']}"
+                            ] if x
+                        ]
+                        st.caption(" | ".join(meta_parts))
+                    elif it.get("_match_reasons"):
+                        st.caption(f"🔎 {' · '.join(it['_match_reasons'])}")
+
+            if cal_scope == "일간 (Day)":
+                d_str = ref_date.strftime("%Y-%m-%d")
+                day_names = ["월", "화", "수", "목", "금", "토", "일"]
+                st.markdown(f"#### 📅 {ref_date.year}년 {ref_date.month}월 {ref_date.day}일 ({day_names[ref_date.weekday()]})")
+                with st.container(border=True):
+                    render_day_cell_items(d_str, key_scope="day", detailed=True)
+
+            elif cal_scope == "주간 (Week)":
+                start_week = ref_date - timedelta(days=ref_date.weekday())
+                end_week = start_week + timedelta(days=6)
+                st.markdown(f"#### 📅 {start_week.year}년 {start_week.month}월 {start_week.day}일 ~ {end_week.month}월 {end_week.day}일")
+
+                st.markdown("""
+                <div class='rm-cal-dow-bar'>
+                    <div class='rm-cal-dow-item' style='color:#323130;'>월</div>
+                    <div class='rm-cal-dow-item' style='color:#323130;'>화</div>
+                    <div class='rm-cal-dow-item' style='color:#323130;'>수</div>
+                    <div class='rm-cal-dow-item' style='color:#323130;'>목</div>
+                    <div class='rm-cal-dow-item' style='color:#323130;'>금</div>
+                    <div class='rm-cal-dow-item' style='color:#0f6cbd;'>토</div>
+                    <div class='rm-cal-dow-item' style='color:#a4262c;'>일</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                with st.container():
+                    st.markdown("<div class='rm-cal-grid-marker'></div>", unsafe_allow_html=True)
+                    w_cols = st.columns(7)
+                    for i in range(7):
+                        cur_d = start_week + timedelta(days=i)
+                        d_str = cur_d.strftime("%Y-%m-%d")
+                        is_today = (d_str == today_str)
+                        with w_cols[i]:
                             if is_today:
-                                st.markdown(f"<span class='cal-today-pill'>{cell_date.day}일 · 오늘</span>", unsafe_allow_html=True)
-                            elif is_cur_month:
-                                st.markdown(f"<div class='cal-day-num'>{cell_date.day}일</div>", unsafe_allow_html=True)
+                                st.markdown(f"<span class='cal-today-badge'>{cur_d.month}/{cur_d.day} · 오늘</span>", unsafe_allow_html=True)
                             else:
-                                st.markdown(f"<div class='cal-day-muted'>{cell_date.month}/{cell_date.day}</div>", unsafe_allow_html=True)
-                            render_day_cell_items(d_str, key_scope="month", detailed=False)
+                                st.markdown(f"<div class='cal-day-num'>{cur_d.month}/{cur_d.day}</div>", unsafe_allow_html=True)
+                            render_day_cell_items(d_str, key_scope="week", detailed=False)
+
+            else:  # 월간 (Month) - 심리스 7열 그리드
+                st.markdown(f"#### 📅 {ref_date.year}년 {ref_date.month}월")
+                cal_weeks = calendar.Calendar(firstweekday=0).monthdatescalendar(ref_date.year, ref_date.month)
+
+                st.markdown("""
+                <div class='rm-cal-dow-bar'>
+                    <div class='rm-cal-dow-item' style='color:#323130;'>월</div>
+                    <div class='rm-cal-dow-item' style='color:#323130;'>화</div>
+                    <div class='rm-cal-dow-item' style='color:#323130;'>수</div>
+                    <div class='rm-cal-dow-item' style='color:#323130;'>목</div>
+                    <div class='rm-cal-dow-item' style='color:#323130;'>금</div>
+                    <div class='rm-cal-dow-item' style='color:#0f6cbd;'>토</div>
+                    <div class='rm-cal-dow-item' style='color:#a4262c;'>일</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                with st.container():
+                    st.markdown("<div class='rm-cal-grid-marker'></div>", unsafe_allow_html=True)
+                    for week_dates in cal_weeks:
+                        cols = st.columns(7)
+                        for idx, cell_date in enumerate(week_dates):
+                            d_str = cell_date.strftime("%Y-%m-%d")
+                            is_cur_month = (cell_date.month == ref_date.month)
+                            is_today = (d_str == today_str)
+                            with cols[idx]:
+                                if is_today:
+                                    st.markdown(f"<span class='cal-today-badge'>{cell_date.day}일 · 오늘</span>", unsafe_allow_html=True)
+                                elif is_cur_month:
+                                    st.markdown(f"<div class='cal-day-num'>{cell_date.day}일</div>", unsafe_allow_html=True)
+                                else:
+                                    st.markdown(f"<div class='cal-day-muted'>{cell_date.month}/{cell_date.day}</div>", unsafe_allow_html=True)
+                                render_day_cell_items(d_str, key_scope="month", detailed=False)
+
+        if cal_drawer_col is not None and cal_drawer_id:
+            with cal_drawer_col:
+                render_todo_detail_editor(cal_drawer_id, key_prefix="cal_drawer", show_close_btn=True)
 
 
 # ==============================================================================

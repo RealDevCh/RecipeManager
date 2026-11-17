@@ -487,39 +487,30 @@ def get_autocomplete_options(column_name: str, master_category: str = None, defa
     return unique_opts
 
 
-def move_checked_todos(visible_ordered_ids: list[int], checked_ids: list[int] | set[int], direction: str) -> bool:
-    """체크박스로 선택된 1개 이상의 할 일 항목을 위/아래/최상단으로 이동 (체크 상태 유지)"""
-    checked_set = {int(x) for x in checked_ids if int(x) in visible_ordered_ids}
-    if not checked_set or len(visible_ordered_ids) < 2:
+def move_single_checked_todo(visible_ordered_ids: list[int], checked_id: int | None, direction: str) -> bool:
+    """단일 체크박스로 선택된 1개 할 일 항목을 위/아래/최상단으로 이동 (체크 상태 유지)"""
+    if checked_id is None or int(checked_id) not in visible_ordered_ids or len(visible_ordered_ids) < 2:
         return False
 
+    target_id = int(checked_id)
     ids = [int(x) for x in visible_ordered_ids]
+    idx = ids.index(target_id)
     moved = False
 
-    if direction == "up":
-        for i in range(1, len(ids)):
-            if ids[i] in checked_set and ids[i - 1] not in checked_set:
-                ids[i - 1], ids[i] = ids[i], ids[i - 1]
-                moved = True
-    elif direction == "down":
-        for i in range(len(ids) - 2, -1, -1):
-            if ids[i] in checked_set and ids[i + 1] not in checked_set:
-                ids[i + 1], ids[i] = ids[i], ids[i + 1]
-                moved = True
-    elif direction == "top":
-        selected_part = [x for x in ids if x in checked_set]
-        other_part = [x for x in ids if x not in checked_set]
-        new_ids = selected_part + other_part
-        if new_ids != ids:
-            ids = new_ids
-            moved = True
-    elif direction == "bottom":
-        selected_part = [x for x in ids if x in checked_set]
-        other_part = [x for x in ids if x not in checked_set]
-        new_ids = other_part + selected_part
-        if new_ids != ids:
-            ids = new_ids
-            moved = True
+    if direction == "up" and idx > 0:
+        ids[idx - 1], ids[idx] = ids[idx], ids[idx - 1]
+        moved = True
+    elif direction == "down" and idx < len(ids) - 1:
+        ids[idx + 1], ids[idx] = ids[idx], ids[idx + 1]
+        moved = True
+    elif direction == "top" and idx > 0:
+        ids.pop(idx)
+        ids.insert(0, target_id)
+        moved = True
+    elif direction == "bottom" and idx < len(ids) - 1:
+        ids.pop(idx)
+        ids.append(target_id)
+        moved = True
 
     if not moved:
         return False
@@ -533,7 +524,7 @@ def move_checked_todos(visible_ordered_ids: list[int], checked_ids: list[int] | 
         sorted_slots = sorted([r["priority_order"] for r in rows])
         if len(set(sorted_slots)) < len(sorted_slots):
             base_slot = min(sorted_slots) if sorted_slots else 1
-            sorted_slots = [base_slot + idx for idx in range(len(ids))]
+            sorted_slots = [base_slot + i for i in range(len(ids))]
 
         now_str = get_kst_str()
         for slot_val, tid in zip(sorted_slots, ids):
