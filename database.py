@@ -685,7 +685,7 @@ def get_todos_enriched(include_completed: bool = True) -> list[dict]:
 
 
 def filter_todos_by_query(todos: list[dict], query: str) -> list[dict]:
-    """공백으로 구분된 다중 키워드(AND)로 할 일의 모든 컬럼·연관 데이터에서 검색하고 매칭 사유를 기록"""
+    """공백으로 구분된 다중 키워드(AND)로 할 일의 모든 컬럼·연관 데이터에서 검색하고 직접 매칭 우선 정렬 + 매칭 사유 기록"""
     clean_q = (query or "").strip().lower()
     if not clean_q:
         for t in todos:
