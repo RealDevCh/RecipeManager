@@ -130,7 +130,7 @@ def init_db():
             );
         """)
 
-        # 7. 업무 요청 / 할 일 테이블 (v1.8.0 계층형 일정 및 의뢰정보 포함)
+        # 7. 업무 요청 / 할 일 테이블
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS work_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -243,7 +243,7 @@ def init_db():
 
 
 def migrate_todo_and_recipe_views():
-    """구버전(v1.0~v1.7) DB 백업 복원 시에도 무손실로 v1.8.0 컬럼을 자동 추가"""
+    """구버전 DB 백업 복원 시에도 무손실로 최신 컬럼을 자동 추가"""
     wr_new_cols = {
         "urgency": "TEXT DEFAULT '보통'",
         "priority_order": "INTEGER DEFAULT 0",
@@ -371,7 +371,6 @@ def _seed_initial_data():
 
         w_cnt = cur.execute("SELECT COUNT(*) FROM work_requests").fetchone()[0]
         if w_cnt == 0:
-            # 상위 프로젝트(납기 큰일) 1건 먼저 등록
             cur.execute("""
                 INSERT INTO work_requests (
                     req_type, title, content, product, step, equipment,
@@ -454,10 +453,6 @@ def ensure_sample_recipe_folder() -> tuple[str, str]:
     return src_dir, tgt_dir
 
 
-# ==============================================================================
-# 자동완성 이력 조회 및 핵심 비즈니스 로직
-# ==============================================================================
-
 def get_autocomplete_options(column_name: str, master_category: str = None, defaults: list[str] = None) -> list[str]:
     """기준정보(master_data) + 과거 work_requests 입력 이력을 중복 제거해 자동완성 목록 생성"""
     options = []
@@ -493,10 +488,7 @@ def get_autocomplete_options(column_name: str, master_category: str = None, defa
 
 
 def move_checked_todos(visible_ordered_ids: list[int], checked_ids: list[int] | set[int], direction: str) -> bool:
-    """
-    체크박스로 선택된 1개 이상의 할 일 항목을 현재 표시 목록 내에서 위(up) 또는 아래(down)로 이동.
-    priority_order를 현재 화면 표시 순서 기준으로 정규화한 뒤 스왑하므로 이동 후에도 체크 상태가 완벽히 유지됨.
-    """
+    """체크박스로 선택된 1개 이상의 할 일 항목을 위/아래/최상단으로 이동 (체크 상태 유지)"""
     checked_set = {int(x) for x in checked_ids if int(x) in visible_ordered_ids}
     if not checked_set or len(visible_ordered_ids) < 2:
         return False
@@ -533,7 +525,6 @@ def move_checked_todos(visible_ordered_ids: list[int], checked_ids: list[int] | 
         return False
 
     with get_connection() as conn:
-        # 현재 표시 항목들이 사용 중인 priority_order 슬롯들을 오름차순으로 정렬해 재배치
         placeholders = ",".join(["?"] * len(ids))
         rows = conn.execute(
             f"SELECT id, priority_order FROM work_requests WHERE id IN ({placeholders})",
@@ -615,15 +606,8 @@ def get_handler_linked_visions_detail(handler_id: int) -> list[dict]:
         return results
 
 
-# ==============================================================================
-# 할 일 (Work Requests) CRUD, 전체 연관 검색 & 다중 증빙 이미지 저장
-# ==============================================================================
-
 def get_todos_enriched(include_completed: bool = True) -> list[dict]:
-    """
-    할 일 목록과 함께 연관 정보(상위업무명, 하위업무명/Lot, 첨부파일명, 변경이력, 횡전개 내역)를
-    모두 결합해 반환 -> 표에 보이지 않는 Lot ID/의뢰부서/첨부파일명까지 전방위 통합 검색 가능
-    """
+    """표에 비노출된 컬럼(Lot ID, 부서, 의뢰자, 첨부파일명, 상위/하위업무 등)까지 모두 결합해 반환"""
     query = "SELECT * FROM work_requests"
     if not include_completed:
         query += " WHERE status != '완료'"
@@ -670,7 +654,6 @@ def get_todos_enriched(include_completed: bool = True) -> list[dict]:
         t["change_summary"] = " ".join(req_to_chgs.get(tid, []))
         t["deploy_summary"] = " ".join(req_to_deps.get(tid, []))
 
-        # 전방위 검색용 필드별 인덱스 맵 (검색 시 어떤 비노출 필드에서 매칭되었는지 안내하기 위함)
         t["_search_fields"] = {
             "ID": f"#{tid} {tid}",
             "할 일 키워드": t.get("title") or "",
@@ -702,7 +685,7 @@ def get_todos_enriched(include_completed: bool = True) -> list[dict]:
 
 
 def filter_todos_by_query(todos: list[dict], query: str) -> list[dict]:
-    """공백으로 구분된 다중 키워드(AND)로 할 일의 모든 컬럼·연관 데이터에서 검색하고 직접 매칭 우선 정렬 + 매칭 사유 기록"""
+    """공백으로 구분된 다중 키워드(AND)로 할 일의 모든 컬럼·연관 데이터에서 검색하고 매칭 사유를 기록"""
     clean_q = (query or "").strip().lower()
     if not clean_q:
         for t in todos:
