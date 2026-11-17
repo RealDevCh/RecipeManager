@@ -5,7 +5,7 @@ import zipfile
 import hashlib
 import difflib
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from PIL import Image, ImageChops
 
 KST = timezone(timedelta(hours=9))
@@ -23,6 +23,10 @@ def get_kst_now() -> datetime:
 
 def get_kst_str(fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
     return get_kst_now().strftime(fmt)
+
+
+def get_kst_today() -> date:
+    return get_kst_now().date()
 
 
 def get_connection() -> sqlite3.Connection:
@@ -126,7 +130,7 @@ def init_db():
             );
         """)
 
-        # 7. 업무 요청 / 할 일 테이블
+        # 7. 업무 요청 / 할 일 테이블 (v1.7.0 계층형 일정 및 의뢰정보 포함)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS work_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -140,11 +144,13 @@ def init_db():
                 equipment TEXT,
                 department TEXT,
                 requester TEXT,
-                assignee TEXT,
+                assignee TEXT DEFAULT '유철형',
                 lot_id TEXT,
                 recipe_id TEXT,
                 urgency TEXT DEFAULT '보통',
                 priority_order INTEGER DEFAULT 0,
+                task_level TEXT DEFAULT '실행(소규모)',
+                parent_id INTEGER DEFAULT NULL,
                 status TEXT DEFAULT '접수' CHECK(status IN ('접수', '진행중', '평가/검증', '완료', '보류')),
                 due_date TEXT,
                 created_at TEXT,
@@ -152,7 +158,7 @@ def init_db():
             );
         """)
 
-        # 8. 첨부 증빙 테이블
+        # 8. 첨부 증빙 테이블 (N개 다중 이미지 지원)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS attachments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -237,14 +243,24 @@ def init_db():
 
 
 def migrate_todo_and_recipe_views():
-    """구버전(v1.0~v1.5) DB 백업 복원 시에도 무손실로 v1.6.x 컬럼을 추가"""
+    """구버전(v1.0~v1.6) DB 백업 복원 시에도 무손실로 v1.7.0 컬럼을 자동 추가"""
+    wr_new_cols = {
+        "urgency": "TEXT DEFAULT '보통'",
+        "priority_order": "INTEGER DEFAULT 0",
+        "department": "TEXT DEFAULT ''",
+        "requester": "TEXT DEFAULT ''",
+        "assignee": "TEXT DEFAULT '유철형'",
+        "lot_id": "TEXT DEFAULT ''",
+        "task_level": "TEXT DEFAULT '실행(소규모)'",
+        "parent_id": "INTEGER DEFAULT NULL",
+    }
     with get_connection() as conn:
         wr_cols = [row["name"] for row in conn.execute("PRAGMA table_info(work_requests)").fetchall()]
-        if "urgency" not in wr_cols:
-            conn.execute("ALTER TABLE work_requests ADD COLUMN urgency TEXT DEFAULT '보통'")
-        if "priority_order" not in wr_cols:
-            conn.execute("ALTER TABLE work_requests ADD COLUMN priority_order INTEGER DEFAULT 0")
+        for col_name, col_def in wr_new_cols.items():
+            if col_name not in wr_cols:
+                conn.execute(f"ALTER TABLE work_requests ADD COLUMN {col_name} {col_def}")
         conn.execute("UPDATE work_requests SET priority_order = id WHERE priority_order IS NULL OR priority_order = 0")
+        conn.execute("UPDATE work_requests SET task_level = '실행(소규모)' WHERE task_level IS NULL OR TRIM(task_level) = ''")
 
         rc_cols = [row["name"] for row in conn.execute("PRAGMA table_info(recipe_conditions)").fetchall()]
         if "condition_desc" not in rc_cols:
@@ -256,6 +272,11 @@ def migrate_todo_and_recipe_views():
 def _seed_initial_data():
     """초기 구동 시 즉시 체험 가능한 기본 기준정보 및 샘플 데이터 생성"""
     now_str = get_kst_str()
+    today_dt = get_kst_today()
+    today_str = today_dt.strftime("%Y-%m-%d")
+    plus2_str = (today_dt + timedelta(days=2)).strftime("%Y-%m-%d")
+    plus5_str = (today_dt + timedelta(days=5)).strftime("%Y-%m-%d")
+
     with get_connection() as conn:
         cur = conn.cursor()
         m_cnt = cur.execute("SELECT COUNT(*) FROM master_data").fetchone()[0]
@@ -265,7 +286,7 @@ def _seed_initial_data():
                 ("Step", "Step01_Align"), ("Step", "Step02_Inspect"), ("Step", "Step03_Review"),
                 ("Module", "Mod_Front"), ("Module", "Mod_Rear"), ("Module", "Mod_Side"),
                 ("Purpose", "Mass_Production"), ("Purpose", "Evaluation"), ("Purpose", "Setup"),
-                ("Department", "제조기술팀"), ("Department", "공정설계팀"), ("Department", "품질보증팀"),
+                ("Department", "제조기술팀"), ("Department", "공정설계팀"), ("Department", "품질보증팀"), ("Department", "설비기술팀"),
                 ("Equipment", "EQP-01"), ("Equipment", "EQP-02"), ("Equipment", "EQP-03"), ("Equipment", "EQP-04"),
                 ("DeviceCode", "AAA"), ("DeviceCode", "BBB"), ("DeviceCode", "B01"), ("DeviceCode", "C10"),
             ]
@@ -350,33 +371,55 @@ def _seed_initial_data():
 
         w_cnt = cur.execute("SELECT COUNT(*) FROM work_requests").fetchone()[0]
         if w_cnt == 0:
+            # 상위 프로젝트(납기 큰일) 1건 먼저 등록
+            cur.execute("""
+                INSERT INTO work_requests (
+                    req_type, title, content, product, step, equipment,
+                    department, requester, assignee, lot_id,
+                    urgency, priority_order, task_level, parent_id, status, due_date, created_at, updated_at
+                )
+                VALUES ('신규 셋업', 'Prod_Alpha 양산 안정화 및 전 설비 횡전개', 'Step01~02 조도/과검 개선 후 EQP-01~04 일괄 전개 마일스톤',
+                        'Prod_Alpha', 'Step01_Align', 'EQP-01', '공정설계팀', '김민수', '유철형', 'LOT-26A01',
+                        '높음', 1, '납기(큰일)', NULL, '진행중', ?, ?, ?)
+            """, (plus5_str, now_str, now_str))
+            milestone_id = cur.lastrowid
+
             sample_todos = [
-                ("Align Fail 조치", "EQP-01 Step01 Align 조도 보정", "조도 저하로 인한 마크 인식률 하락 보정 (LightCh1 160 -> 180)", "Prod_Alpha", "Step01_Align", "EQP-01", "긴급", 1, "진행중"),
-                ("파라미터 튜닝", "VIS_INSPECT_SURFACE 민감도 재검증", "과검(False Call) 저감을 위한 MinBlobArea 10 -> 12 상향 평가", "Prod_Alpha", "Step02_Inspect", "EQP-02", "높음", 2, "평가/검증"),
-                ("횡전개", "HDL_ALPHA_MAIN v2.1 전 설비 횡전개", "EQP-01 검증 완료 후 EQP-02~04 일괄 적용 및 Diff 대조", "Prod_Alpha", "Step01_Align", "EQP-03", "보통", 3, "접수"),
-                ("신규 셋업", "Prod_Beta 신규 평가 레시피 백업", "평가 완료 후 마스터 DB 스냅샷 저장", "Prod_Beta", "Step02_Inspect", "EQP-04", "낮음", 4, "접수"),
+                ("Align Fail 조치", "EQP-01 Step01 Align 조도 보정", "조도 저하로 인한 마크 인식률 하락 보정 (LightCh1 160 -> 180)",
+                 "Prod_Alpha", "Step01_Align", "EQP-01", "제조기술팀", "박지훈", "유철형", "LOT-26A01",
+                 "긴급", 2, "실행(소규모)", milestone_id, "진행중", today_str),
+                ("파라미터 튜닝", "VIS_INSPECT_SURFACE 민감도 재검증", "과검(False Call) 저감을 위한 MinBlobArea 10 -> 12 상향 평가",
+                 "Prod_Alpha", "Step02_Inspect", "EQP-02", "품질보증팀", "이서연", "유철형", "LOT-26A02",
+                 "높음", 3, "실행(소규모)", milestone_id, "평가/검증", today_str),
+                ("횡전개", "HDL_ALPHA_MAIN v2.1 전 설비 횡전개", "EQP-01 검증 완료 후 EQP-02~04 일괄 적용 및 Diff 대조",
+                 "Prod_Alpha", "Step01_Align", "EQP-03", "설비기술팀", "정현우", "유철형", "LOT-26A03",
+                 "보통", 4, "실행(소규모)", milestone_id, "접수", plus2_str),
+                ("신규 셋업", "Prod_Beta 신규 평가 레시피 백업", "평가 완료 후 마스터 DB 스냅샷 저장",
+                 "Prod_Beta", "Step02_Inspect", "EQP-04", "공정설계팀", "김민수", "유철형", "LOT-26B01",
+                 "낮음", 5, "실행(소규모)", None, "접수", plus2_str),
             ]
-            first_req_id = None
-            for r_type, title, content, prod, step, eqp, urg, p_ord, stat in sample_todos:
+            for r_type, title, content, prod, step, eqp, dept, reqr, asg, lot, urg, p_ord, t_lvl, p_id, stat, d_date in sample_todos:
                 cur.execute("""
-                    INSERT INTO work_requests (req_type, title, content, product, step, equipment, urgency, priority_order, status, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (r_type, title, content, prod, step, eqp, urg, p_ord, stat, now_str, now_str))
-                if first_req_id is None:
-                    first_req_id = cur.lastrowid
+                    INSERT INTO work_requests (
+                        req_type, title, content, product, step, equipment,
+                        department, requester, assignee, lot_id,
+                        urgency, priority_order, task_level, parent_id, status, due_date, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (r_type, title, content, prod, step, eqp, dept, reqr, asg, lot, urg, p_ord, t_lvl, p_id, stat, d_date, now_str, now_str))
 
             cur.execute("""
                 INSERT INTO recipe_changes (request_id, target_type, target_name, change_type, before_val, after_val, change_reason, operator, evaluation_result, created_at)
-                VALUES (?, 'Vision', 'VIS_ALIGN_MARK_A', '파라미터 변경', 'LightCh1: 160 / Gain: 1.20', 'LightCh1: 180 / Gain: 1.35', '챔버 조명 노후화 보상 및 인식률 개선', '엔지니어', '양호(적용가능)', ?)
-            """, (first_req_id, now_str))
+                VALUES (?, 'Vision', 'VIS_ALIGN_MARK_A', '파라미터 변경', 'LightCh1: 160 / Gain: 1.20', 'LightCh1: 180 / Gain: 1.35', '챔버 조명 노후화 보상 및 인식률 개선', '유철형', '양호(적용가능)', ?)
+            """, (milestone_id, now_str))
             cur.execute("""
                 INSERT INTO recipe_changes (request_id, target_type, target_name, change_type, before_val, after_val, change_reason, operator, evaluation_result, created_at)
-                VALUES (?, 'Vision', 'VIS_INSPECT_SURFACE', '파라미터 변경', 'MinBlobArea: 10', 'MinBlobArea: 12', '미세 노이즈 과검 필터링', '엔지니어', '평가중', ?)
-            """, (first_req_id, now_str))
+                VALUES (?, 'Vision', 'VIS_INSPECT_SURFACE', '파라미터 변경', 'MinBlobArea: 10', 'MinBlobArea: 12', '미세 노이즈 과검 필터링', '유철형', '평가중', ?)
+            """, (milestone_id, now_str))
             cur.execute("""
                 INSERT INTO recipe_changes (request_id, target_type, target_name, change_type, before_val, after_val, change_reason, operator, evaluation_result, created_at)
-                VALUES (?, 'Vision', 'VIS_BETA_EDGE', '신규 분기', '-', 'EdgeContrast: 45 / FilterSigma: 1.5', 'Prod_Beta 신규 평가 셋업', '엔지니어', '평가중', ?)
-            """, (first_req_id, now_str))
+                VALUES (?, 'Vision', 'VIS_BETA_EDGE', '신규 분기', '-', 'EdgeContrast: 45 / FilterSigma: 1.5', 'Prod_Beta 신규 평가 셋업', '유철형', '평가중', ?)
+            """, (milestone_id, now_str))
 
         conn.commit()
 
@@ -412,8 +455,42 @@ def ensure_sample_recipe_folder() -> tuple[str, str]:
 
 
 # ==============================================================================
-# 핵심 비즈니스 로직 (우선순위 조정 + XML 파싱 + Handler-Vision 상세)
+# 자동완성 이력 조회 및 핵심 비즈니스 로직
 # ==============================================================================
+
+def get_autocomplete_options(column_name: str, master_category: str = None, defaults: list[str] = None) -> list[str]:
+    """기준정보(master_data) + 과거 work_requests 입력 이력을 중복 제거해 자동완성 목록 생성"""
+    options = []
+    if defaults:
+        options.extend(defaults)
+    if master_category:
+        try:
+            options.extend(get_master_names(master_category))
+        except Exception:
+            pass
+
+    allowed_cols = {
+        "title", "department", "requester", "lot_id",
+        "product", "step", "module", "purpose", "equipment", "assignee", "req_type"
+    }
+    if column_name in allowed_cols:
+        with get_connection() as conn:
+            rows = conn.execute(
+                f"SELECT DISTINCT {column_name} FROM work_requests "
+                f"WHERE {column_name} IS NOT NULL AND TRIM({column_name}) != '' "
+                f"ORDER BY id DESC LIMIT 150"
+            ).fetchall()
+            options.extend([str(r[0]).strip() for r in rows if r[0]])
+
+    seen = set()
+    unique_opts = []
+    for item in options:
+        clean = str(item).strip()
+        if clean and clean not in seen:
+            seen.add(clean)
+            unique_opts.append(clean)
+    return unique_opts
+
 
 def swap_todo_priority(id_a: int, id_b: int):
     """두 할 일 항목의 priority_order 값을 서로 교환"""
@@ -505,7 +582,7 @@ def get_handler_linked_visions_detail(handler_id: int) -> list[dict]:
 
 
 # ==============================================================================
-# 할 일 (Work Requests) CRUD
+# 할 일 (Work Requests) CRUD & 다중 증빙 이미지 저장
 # ==============================================================================
 
 def get_todos(include_completed: bool = False) -> list[dict]:
@@ -515,6 +592,18 @@ def get_todos(include_completed: bool = False) -> list[dict]:
     query += " ORDER BY priority_order ASC, id DESC"
     with get_connection() as conn:
         rows = conn.execute(query).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_open_milestones() -> list[dict]:
+    """상위 업무(납기 큰일) 목록 조회"""
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT id, title, due_date, status
+            FROM work_requests
+            WHERE task_level = '납기(큰일)'
+            ORDER BY CASE WHEN status = '완료' THEN 1 ELSE 0 END ASC, id DESC
+        """).fetchall()
         return [dict(r) for r in rows]
 
 
@@ -532,9 +621,16 @@ def create_todo(
     product: str = "",
     step: str = "",
     equipment: str = "",
-    due_date: str = ""
+    department: str = "",
+    requester: str = "",
+    assignee: str = "유철형",
+    lot_id: str = "",
+    due_date: str = "",
+    task_level: str = "실행(소규모)",
+    parent_id: int | None = None
 ) -> int:
     now_str = get_kst_str()
+    clean_assignee = (assignee or "").strip() or "유철형"
     with get_connection() as conn:
         cur = conn.cursor()
         min_row = cur.execute("SELECT MIN(priority_order) as min_ord FROM work_requests WHERE status != '완료'").fetchone()
@@ -543,12 +639,16 @@ def create_todo(
         cur.execute("""
             INSERT INTO work_requests (
                 req_type, title, content, product, step, equipment,
-                urgency, priority_order, status, due_date, created_at, updated_at
+                department, requester, assignee, lot_id,
+                urgency, priority_order, task_level, parent_id,
+                status, due_date, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, '접수', ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '접수', ?, ?, ?)
         """, (
             req_type, title.strip(), content, product, step, equipment,
-            urgency, next_ord, due_date, now_str, now_str
+            department, requester, clean_assignee, lot_id,
+            urgency, next_ord, task_level, parent_id,
+            due_date, now_str, now_str
         ))
         new_id = cur.lastrowid
         if next_ord == 0:
@@ -566,22 +666,71 @@ def update_todo_detail(
     product: str = "",
     step: str = "",
     equipment: str = "",
-    assignee: str = "",
-    due_date: str = ""
+    department: str = "",
+    requester: str = "",
+    assignee: str = "유철형",
+    lot_id: str = "",
+    due_date: str = "",
+    task_level: str = "실행(소규모)",
+    parent_id: int | None = None
 ):
+    clean_assignee = (assignee or "").strip() or "유철형"
     with get_connection() as conn:
         conn.execute("""
             UPDATE work_requests
             SET title = ?, urgency = ?, status = ?, content = ?,
-                product = ?, step = ?, equipment = ?, assignee = ?, due_date = ?,
+                product = ?, step = ?, equipment = ?,
+                department = ?, requester = ?, assignee = ?, lot_id = ?,
+                due_date = ?, task_level = ?, parent_id = ?,
                 updated_at = ?
             WHERE id = ?
         """, (
             title.strip(), urgency, status, content,
-            product, step, equipment, assignee, due_date,
+            product, step, equipment,
+            department, requester, clean_assignee, lot_id,
+            due_date, task_level, parent_id,
             get_kst_str(), int(todo_id)
         ))
         conn.commit()
+
+
+def save_todo_attachments(request_id: int, uploaded_files: list = None, pasted_images: list = None):
+    """N개의 업로드 파일과 클립보드 이미지를 일괄 저장"""
+    att_dir = os.path.join(DATA_DIR, "attachments")
+    os.makedirs(att_dir, exist_ok=True)
+    now_ts = get_kst_str("%Y%m%d_%H%M%S")
+    now_str = get_kst_str()
+
+    with get_connection() as conn:
+        for idx, up_f in enumerate(uploaded_files or []):
+            ext = os.path.splitext(up_f.name)[1] or ".png"
+            fname = f"todo_{request_id}_{now_ts}_f{idx}{ext}"
+            fpath = os.path.join(att_dir, fname)
+            with open(fpath, "wb") as out_f:
+                out_f.write(up_f.getbuffer())
+            conn.execute(
+                "INSERT INTO attachments (request_id, file_name, file_path, created_at) VALUES (?, ?, ?, ?)",
+                (int(request_id), fname, fpath, now_str)
+            )
+
+        for idx, p_img in enumerate(pasted_images or []):
+            fname = f"todo_{request_id}_{now_ts}_p{idx}.png"
+            fpath = os.path.join(att_dir, fname)
+            p_img.save(fpath)
+            conn.execute(
+                "INSERT INTO attachments (request_id, file_name, file_path, created_at) VALUES (?, ?, ?, ?)",
+                (int(request_id), fname, fpath, now_str)
+            )
+        conn.commit()
+
+
+def get_todo_attachments(request_id: int) -> list[dict]:
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM attachments WHERE request_id = ? ORDER BY id DESC",
+            (int(request_id),)
+        ).fetchall()
+        return [dict(r) for r in rows]
 
 
 def toggle_todo_complete(todo_id: int, current_status: str):
@@ -604,6 +753,7 @@ def delete_work_request(req_id: int):
                     os.remove(fp)
                 except Exception:
                     pass
+        conn.execute("UPDATE work_requests SET parent_id = NULL WHERE parent_id = ?", (int(req_id),))
         conn.execute("DELETE FROM work_requests WHERE id = ?", (int(req_id),))
         conn.commit()
 
@@ -834,7 +984,7 @@ def compare_folders(source_dir: str, target_dir: str) -> list[dict]:
         in_src = k in src_map
         in_tgt = k in tgt_map
         if in_src and in_tgt:
-            status = "일치" if src_map[k]["hash"] == tgt_map[k]["hash"] else "내용 변경"
+            status = "🟢 일치" if src_map[k]["hash"] == tgt_map[k]["hash"] else "🟡 내용 변경"
             results.append({
                 "파일경로": k,
                 "상태": status,
@@ -849,7 +999,7 @@ def compare_folders(source_dir: str, target_dir: str) -> list[dict]:
         elif in_src and not in_tgt:
             results.append({
                 "파일경로": k,
-                "상태": "누락 (설비에 없음)",
+                "상태": "🔴 누락 (설비에 없음)",
                 "기준크기(B)": src_map[k]["size"],
                 "설비크기(B)": 0,
                 "기준해시": src_map[k]["hash"][:12],
@@ -861,7 +1011,7 @@ def compare_folders(source_dir: str, target_dir: str) -> list[dict]:
         else:
             results.append({
                 "파일경로": k,
-                "상태": "추가 (신규 파일)",
+                "상태": "🔵 추가 (신규 파일)",
                 "기준크기(B)": 0,
                 "설비크기(B)": tgt_map[k]["size"],
                 "기준해시": "-",
