@@ -130,7 +130,7 @@ def init_db():
             );
         """)
 
-        # 7. 업무 요청 / 할 일 테이블 (v1.7.0 계층형 일정 및 의뢰정보 포함)
+        # 7. 업무 요청 / 할 일 테이블 (v1.8.0 계층형 일정 및 의뢰정보 포함)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS work_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -243,7 +243,7 @@ def init_db():
 
 
 def migrate_todo_and_recipe_views():
-    """구버전(v1.0~v1.6) DB 백업 복원 시에도 무손실로 v1.7.0 컬럼을 자동 추가"""
+    """구버전(v1.0~v1.7) DB 백업 복원 시에도 무손실로 v1.8.0 컬럼을 자동 추가"""
     wr_new_cols = {
         "urgency": "TEXT DEFAULT '보통'",
         "priority_order": "INTEGER DEFAULT 0",
@@ -471,7 +471,7 @@ def get_autocomplete_options(column_name: str, master_category: str = None, defa
 
     allowed_cols = {
         "title", "department", "requester", "lot_id",
-        "product", "step", "module", "purpose", "equipment", "assignee", "req_type"
+        "product", "step", "module", "purpose", "equipment", "assignee", "req_type", "urgency"
     }
     if column_name in allowed_cols:
         with get_connection() as conn:
@@ -492,32 +492,66 @@ def get_autocomplete_options(column_name: str, master_category: str = None, defa
     return unique_opts
 
 
-def swap_todo_priority(id_a: int, id_b: int):
-    """두 할 일 항목의 priority_order 값을 서로 교환"""
-    with get_connection() as conn:
-        row_a = conn.execute("SELECT priority_order FROM work_requests WHERE id = ?", (int(id_a),)).fetchone()
-        row_b = conn.execute("SELECT priority_order FROM work_requests WHERE id = ?", (int(id_b),)).fetchone()
-        if row_a and row_b:
-            order_a = row_a["priority_order"]
-            order_b = row_b["priority_order"]
-            if order_a == order_b:
-                order_a, order_b = int(id_a), int(id_b)
-            now_str = get_kst_str()
-            conn.execute("UPDATE work_requests SET priority_order = ?, updated_at = ? WHERE id = ?", (order_b, now_str, int(id_a)))
-            conn.execute("UPDATE work_requests SET priority_order = ?, updated_at = ? WHERE id = ?", (order_a, now_str, int(id_b)))
-            conn.commit()
+def move_checked_todos(visible_ordered_ids: list[int], checked_ids: list[int] | set[int], direction: str) -> bool:
+    """
+    체크박스로 선택된 1개 이상의 할 일 항목을 현재 표시 목록 내에서 위(up) 또는 아래(down)로 이동.
+    priority_order를 현재 화면 표시 순서 기준으로 정규화한 뒤 스왑하므로 이동 후에도 체크 상태가 완벽히 유지됨.
+    """
+    checked_set = {int(x) for x in checked_ids if int(x) in visible_ordered_ids}
+    if not checked_set or len(visible_ordered_ids) < 2:
+        return False
 
+    ids = [int(x) for x in visible_ordered_ids]
+    moved = False
 
-def update_todo_orders_by_ids(ordered_ids: list[int]):
-    """드래그 정렬 완료된 ID 리스트 순서대로 priority_order 일괄 부여"""
-    now_str = get_kst_str()
+    if direction == "up":
+        for i in range(1, len(ids)):
+            if ids[i] in checked_set and ids[i - 1] not in checked_set:
+                ids[i - 1], ids[i] = ids[i], ids[i - 1]
+                moved = True
+    elif direction == "down":
+        for i in range(len(ids) - 2, -1, -1):
+            if ids[i] in checked_set and ids[i + 1] not in checked_set:
+                ids[i + 1], ids[i] = ids[i], ids[i + 1]
+                moved = True
+    elif direction == "top":
+        selected_part = [x for x in ids if x in checked_set]
+        other_part = [x for x in ids if x not in checked_set]
+        new_ids = selected_part + other_part
+        if new_ids != ids:
+            ids = new_ids
+            moved = True
+    elif direction == "bottom":
+        selected_part = [x for x in ids if x in checked_set]
+        other_part = [x for x in ids if x not in checked_set]
+        new_ids = other_part + selected_part
+        if new_ids != ids:
+            ids = new_ids
+            moved = True
+
+    if not moved:
+        return False
+
     with get_connection() as conn:
-        for idx, todo_id in enumerate(ordered_ids, start=1):
+        # 현재 표시 항목들이 사용 중인 priority_order 슬롯들을 오름차순으로 정렬해 재배치
+        placeholders = ",".join(["?"] * len(ids))
+        rows = conn.execute(
+            f"SELECT id, priority_order FROM work_requests WHERE id IN ({placeholders})",
+            ids
+        ).fetchall()
+        sorted_slots = sorted([r["priority_order"] for r in rows])
+        if len(set(sorted_slots)) < len(sorted_slots):
+            base_slot = min(sorted_slots) if sorted_slots else 1
+            sorted_slots = [base_slot + idx for idx in range(len(ids))]
+
+        now_str = get_kst_str()
+        for slot_val, tid in zip(sorted_slots, ids):
             conn.execute(
                 "UPDATE work_requests SET priority_order = ?, updated_at = ? WHERE id = ?",
-                (idx, now_str, int(todo_id))
+                (slot_val, now_str, tid)
             )
         conn.commit()
+    return True
 
 
 def parse_xml_key_params(xml_str: str) -> list[dict]:
@@ -582,27 +616,142 @@ def get_handler_linked_visions_detail(handler_id: int) -> list[dict]:
 
 
 # ==============================================================================
-# 할 일 (Work Requests) CRUD & 다중 증빙 이미지 저장
+# 할 일 (Work Requests) CRUD, 전체 연관 검색 & 다중 증빙 이미지 저장
 # ==============================================================================
 
-def get_todos(include_completed: bool = False) -> list[dict]:
+def get_todos_enriched(include_completed: bool = True) -> list[dict]:
+    """
+    할 일 목록과 함께 연관 정보(상위업무명, 하위업무명/Lot, 첨부파일명, 변경이력, 횡전개 내역)를
+    모두 결합해 반환 -> 표에 보이지 않는 Lot ID/의뢰부서/첨부파일명까지 전방위 통합 검색 가능
+    """
     query = "SELECT * FROM work_requests"
     if not include_completed:
         query += " WHERE status != '완료'"
     query += " ORDER BY priority_order ASC, id DESC"
+
     with get_connection() as conn:
-        rows = conn.execute(query).fetchall()
-        return [dict(r) for r in rows]
+        todos = [dict(r) for r in conn.execute(query).fetchall()]
+        all_rows = [dict(r) for r in conn.execute("SELECT id, title, lot_id, parent_id FROM work_requests").fetchall()]
+        atts = [dict(r) for r in conn.execute("SELECT request_id, file_name FROM attachments").fetchall()]
+        chgs = [dict(r) for r in conn.execute(
+            "SELECT request_id, target_name, before_val, after_val, change_reason FROM recipe_changes WHERE request_id IS NOT NULL"
+        ).fetchall()]
+        deps = [dict(r) for r in conn.execute(
+            "SELECT request_id, title FROM deployments WHERE request_id IS NOT NULL"
+        ).fetchall()]
+
+    id_to_title = {r["id"]: r["title"] for r in all_rows}
+    parent_to_children_text: dict[int, list[str]] = {}
+    for r in all_rows:
+        pid = r.get("parent_id")
+        if pid:
+            parent_to_children_text.setdefault(pid, []).append(f"{r.get('title', '')} {r.get('lot_id', '')}")
+
+    req_to_atts: dict[int, list[str]] = {}
+    for a in atts:
+        req_to_atts.setdefault(a["request_id"], []).append(a.get("file_name") or "")
+
+    req_to_chgs: dict[int, list[str]] = {}
+    for c in chgs:
+        req_to_chgs.setdefault(c["request_id"], []).append(
+            f"{c.get('target_name', '')} {c.get('before_val', '')} {c.get('after_val', '')} {c.get('change_reason', '')}"
+        )
+
+    req_to_deps: dict[int, list[str]] = {}
+    for d in deps:
+        req_to_deps.setdefault(d["request_id"], []).append(d.get("title") or "")
+
+    for t in todos:
+        tid = t["id"]
+        pid = t.get("parent_id")
+        t["parent_title"] = id_to_title.get(pid, "") if pid else ""
+        t["child_summary"] = " ".join(parent_to_children_text.get(tid, []))
+        t["attachment_names"] = " ".join(req_to_atts.get(tid, []))
+        t["change_summary"] = " ".join(req_to_chgs.get(tid, []))
+        t["deploy_summary"] = " ".join(req_to_deps.get(tid, []))
+
+        # 전방위 검색용 필드별 인덱스 맵 (검색 시 어떤 비노출 필드에서 매칭되었는지 안내하기 위함)
+        t["_search_fields"] = {
+            "ID": f"#{tid} {tid}",
+            "할 일 키워드": t.get("title") or "",
+            "세부 내용": t.get("content") or "",
+            "Lot ID": t.get("lot_id") or "",
+            "의뢰 부서": t.get("department") or "",
+            "의뢰자": t.get("requester") or "",
+            "담당자": t.get("assignee") or "",
+            "Product": t.get("product") or "",
+            "Step": t.get("step") or "",
+            "Module": t.get("module") or "",
+            "Purpose": t.get("purpose") or "",
+            "설비(Equipment)": t.get("equipment") or "",
+            "목표 기한": t.get("due_date") or "",
+            "상태": t.get("status") or "",
+            "긴급도": t.get("urgency") or "",
+            "업무 구분": t.get("task_level") or "",
+            "요청 유형": t.get("req_type") or "",
+            "등록일시": t.get("created_at") or "",
+            "상위 업무": t["parent_title"],
+            "하위 실행 항목": t["child_summary"],
+            "첨부 이미지": t["attachment_names"],
+            "연관 레시피 변경": t["change_summary"],
+            "연관 횡전개": t["deploy_summary"],
+        }
+        t["_search_blob"] = " ".join(v for v in t["_search_fields"].values() if v).lower()
+
+    return todos
+
+
+def filter_todos_by_query(todos: list[dict], query: str) -> list[dict]:
+    """공백으로 구분된 다중 키워드(AND)로 할 일의 모든 컬럼·연관 데이터에서 검색하고 직접 매칭 우선 정렬 + 매칭 사유 기록"""
+    clean_q = (query or "").strip().lower()
+    if not clean_q:
+        for t in todos:
+            t["_match_reasons"] = []
+        return todos
+
+    tokens = [tok for tok in clean_q.split() if tok]
+    direct_matched = []
+    related_matched = []
+
+    for t in todos:
+        blob = t.get("_search_blob", "")
+        if all(tok in blob for tok in tokens):
+            reasons = []
+            s_fields = t.get("_search_fields", {})
+            is_only_child_match = True
+            for fname, fval in s_fields.items():
+                if not fval:
+                    continue
+                fval_low = fval.lower()
+                if any(tok in fval_low for tok in tokens):
+                    if fname != "하위 실행 항목":
+                        is_only_child_match = False
+                    if fname != "할 일 키워드":
+                        short_val = fval.strip()
+                        if len(short_val) > 28:
+                            short_val = short_val[:28] + "…"
+                        reasons.append(f"{fname}: {short_val}")
+            t["_match_reasons"] = reasons[:3]
+            if is_only_child_match:
+                related_matched.append(t)
+            else:
+                direct_matched.append(t)
+
+    return direct_matched + related_matched
+
+
+def get_todos(include_completed: bool = False) -> list[dict]:
+    return get_todos_enriched(include_completed=include_completed)
 
 
 def get_open_milestones() -> list[dict]:
     """상위 업무(납기 큰일) 목록 조회"""
     with get_connection() as conn:
         rows = conn.execute("""
-            SELECT id, title, due_date, status
+            SELECT id, title, due_date, status, department, requester, assignee, lot_id
             FROM work_requests
             WHERE task_level = '납기(큰일)'
-            ORDER BY CASE WHEN status = '완료' THEN 1 ELSE 0 END ASC, id DESC
+            ORDER BY CASE WHEN status = '완료' THEN 1 ELSE 0 END ASC, priority_order ASC, id DESC
         """).fetchall()
         return [dict(r) for r in rows]
 
