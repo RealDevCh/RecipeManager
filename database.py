@@ -44,7 +44,6 @@ def init_db():
     with get_connection() as conn:
         cursor = conn.cursor()
 
-        # 1. 기준정보 테이블
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS master_data (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,7 +55,6 @@ def init_db():
             );
         """)
 
-        # 2. Recipe 마스터 테이블
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS recipes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,7 +68,6 @@ def init_db():
             );
         """)
 
-        # 3. Recipe Align 및 참조 이미지 테이블 (다중 이미지 1:N)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS recipe_images (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,7 +80,6 @@ def init_db():
             );
         """)
 
-        # 4. Handler-Vision 참조 관계 (N:M, 순서 유지)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS handler_vision_map (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,7 +93,6 @@ def init_db():
             );
         """)
 
-        # 5. 조건별 Recipe 매핑 (Product-Step-Module-Purpose -> Handler 1:N)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS recipe_conditions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,7 +108,6 @@ def init_db():
             );
         """)
 
-        # 6. PKG / Device Code 매핑 이력 테이블 (MD-04, MD-05)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS code_mappings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -130,7 +124,6 @@ def init_db():
             );
         """)
 
-        # 7. 업무 요청 / 할 일 테이블
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS work_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -158,7 +151,6 @@ def init_db():
             );
         """)
 
-        # 8. 첨부 증빙 테이블 (N개 다중 이미지 지원)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS attachments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -170,7 +162,6 @@ def init_db():
             );
         """)
 
-        # 9. Recipe 변경 이력 감사 로그
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS recipe_changes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -188,7 +179,6 @@ def init_db():
             );
         """)
 
-        # 10. 횡전개(Deployment) 마스터 테이블
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS deployments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -204,7 +194,6 @@ def init_db():
             );
         """)
 
-        # 11. 횡전개 대상 설비별 상세 진행 상태
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS deployment_targets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -222,7 +211,6 @@ def init_db():
             );
         """)
 
-        # 12. 설비별 Recipe 최종 확인 상태
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS equipment_recipe_status (
                 equipment TEXT PRIMARY KEY,
@@ -238,11 +226,11 @@ def init_db():
 
         conn.commit()
 
-    migrate_todo_and_recipe_views()
+    migrate_schema()
     _seed_initial_data()
 
 
-def migrate_todo_and_recipe_views():
+def migrate_schema():
     """구버전 DB 백업 복원 시에도 무손실로 최신 컬럼을 자동 추가"""
     wr_new_cols = {
         "urgency": "TEXT DEFAULT '보통'",
@@ -265,7 +253,6 @@ def migrate_todo_and_recipe_views():
         rc_cols = [row["name"] for row in conn.execute("PRAGMA table_info(recipe_conditions)").fetchall()]
         if "condition_desc" not in rc_cols:
             conn.execute("ALTER TABLE recipe_conditions ADD COLUMN condition_desc TEXT DEFAULT ''")
-
         conn.commit()
 
 
@@ -279,8 +266,7 @@ def _seed_initial_data():
 
     with get_connection() as conn:
         cur = conn.cursor()
-        m_cnt = cur.execute("SELECT COUNT(*) FROM master_data").fetchone()[0]
-        if m_cnt == 0:
+        if cur.execute("SELECT COUNT(*) FROM master_data").fetchone()[0] == 0:
             default_items = [
                 ("Product", "Prod_Alpha"), ("Product", "Prod_Beta"), ("Product", "Prod_Gamma"),
                 ("Step", "Step01_Align"), ("Step", "Step02_Inspect"), ("Step", "Step03_Review"),
@@ -302,8 +288,7 @@ def _seed_initial_data():
                 VALUES ('BBB', 'Prod_Beta', 'Mod_Rear', 'Evaluation', ?, '신규 디바이스 평가 셋업', '확정', '엔지니어', ?)
             """, (now_str, now_str))
 
-        r_cnt = cur.execute("SELECT COUNT(*) FROM recipes").fetchone()[0]
-        if r_cnt == 0:
+        if cur.execute("SELECT COUNT(*) FROM recipes").fetchone()[0] == 0:
             cur.execute("""
                 INSERT INTO recipes (recipe_type, name, version, description, xml_content, created_at)
                 VALUES ('HANDLER', 'HDL_ALPHA_MAIN', 'v2.1', 'Prod_Alpha 양산 메인 핸들러', ?, ?)
@@ -369,8 +354,7 @@ def _seed_initial_data():
                 VALUES ('Prod_Beta', 'Step02_Inspect', 'Mod_Rear', 'Evaluation', ?, '신규 조도 평가 조건', ?)
             """, (h2_id, now_str))
 
-        w_cnt = cur.execute("SELECT COUNT(*) FROM work_requests").fetchone()[0]
-        if w_cnt == 0:
+        if cur.execute("SELECT COUNT(*) FROM work_requests").fetchone()[0] == 0:
             cur.execute("""
                 INSERT INTO work_requests (
                     req_type, title, content, product, step, equipment,
@@ -453,6 +437,10 @@ def ensure_sample_recipe_folder() -> tuple[str, str]:
     return src_dir, tgt_dir
 
 
+# ==============================================================================
+# 자동완성 & 단일 항목 우선순위 이동 & 전방위 통합 검색
+# ==============================================================================
+
 def get_autocomplete_options(column_name: str, master_category: str = None, defaults: list[str] = None) -> list[str]:
     """기준정보(master_data) + 과거 work_requests 입력 이력을 중복 제거해 자동완성 목록 생성"""
     options = []
@@ -487,14 +475,14 @@ def get_autocomplete_options(column_name: str, master_category: str = None, defa
     return unique_opts
 
 
-def move_single_checked_todo(visible_ordered_ids: list[int], checked_id: int | None, direction: str) -> bool:
-    """단일 체크박스로 선택된 1개 할 일 항목을 위/아래/최상단으로 이동 (체크 상태 유지)"""
-    if checked_id is None or int(checked_id) not in visible_ordered_ids or len(visible_ordered_ids) < 2:
+def move_selected_todo(visible_ordered_ids: list[int], target_id: int | None, direction: str) -> bool:
+    """선택된 1개 할 일 항목을 위(up) / 아래(down) / 최상단(top)으로 이동"""
+    if target_id is None or int(target_id) not in visible_ordered_ids or len(visible_ordered_ids) < 2:
         return False
 
-    target_id = int(checked_id)
+    tid = int(target_id)
     ids = [int(x) for x in visible_ordered_ids]
-    idx = ids.index(target_id)
+    idx = ids.index(tid)
     moved = False
 
     if direction == "up" and idx > 0:
@@ -505,11 +493,7 @@ def move_single_checked_todo(visible_ordered_ids: list[int], checked_id: int | N
         moved = True
     elif direction == "top" and idx > 0:
         ids.pop(idx)
-        ids.insert(0, target_id)
-        moved = True
-    elif direction == "bottom" and idx < len(ids) - 1:
-        ids.pop(idx)
-        ids.append(target_id)
+        ids.insert(0, tid)
         moved = True
 
     if not moved:
@@ -527,78 +511,17 @@ def move_single_checked_todo(visible_ordered_ids: list[int], checked_id: int | N
             sorted_slots = [base_slot + i for i in range(len(ids))]
 
         now_str = get_kst_str()
-        for slot_val, tid in zip(sorted_slots, ids):
+        for slot_val, item_id in zip(sorted_slots, ids):
             conn.execute(
                 "UPDATE work_requests SET priority_order = ?, updated_at = ? WHERE id = ?",
-                (slot_val, now_str, tid)
+                (slot_val, now_str, item_id)
             )
         conn.commit()
     return True
 
 
-def parse_xml_key_params(xml_str: str) -> list[dict]:
-    """XML 문자열에서 말단(Leaf) 파라미터 태그명과 설정값을 추출"""
-    if not xml_str or not xml_str.strip():
-        return []
-    try:
-        root = ET.fromstring(xml_str.strip())
-        params = []
-        for elem in root.iter():
-            if len(elem) == 0 and elem.text and elem.text.strip():
-                params.append({
-                    "파라미터": elem.tag,
-                    "설정값": elem.text.strip()
-                })
-        return params
-    except ET.ParseError:
-        fallback = []
-        for line in xml_str.splitlines():
-            clean = line.strip()
-            if not clean:
-                continue
-            if "=" in clean:
-                k, v = clean.split("=", 1)
-                fallback.append({"파라미터": k.strip(), "설정값": v.strip()})
-            else:
-                fallback.append({"파라미터": "RAW", "설정값": clean})
-        return fallback
-
-
-def get_handler_linked_visions_detail(handler_id: int) -> list[dict]:
-    """Handler에 연결된 Vision 목록 + 주요 파라미터 + 최근 변경점 + Align 이미지 조회"""
-    with get_connection() as conn:
-        visions = conn.execute("""
-            SELECT v.id, v.name, v.version, v.description, v.xml_content, m.seq_order
-            FROM handler_vision_map m
-            JOIN recipes v ON m.vision_id = v.id
-            WHERE m.handler_id = ?
-            ORDER BY m.seq_order ASC, v.id ASC
-        """, (int(handler_id),)).fetchall()
-
-        results = []
-        for v in visions:
-            v_dict = dict(v)
-            v_dict["key_params"] = parse_xml_key_params(v_dict.get("xml_content", ""))
-            changes = conn.execute("""
-                SELECT id, change_type, before_val, after_val, change_reason, operator, evaluation_result, created_at
-                FROM recipe_changes
-                WHERE target_name = ? AND LOWER(target_type) = 'vision'
-                ORDER BY id DESC LIMIT 5
-            """, (v_dict["name"],)).fetchall()
-            v_dict["recent_changes"] = [dict(c) for c in changes]
-            imgs = conn.execute("""
-                SELECT id, file_name, file_path, tag, created_at
-                FROM recipe_images
-                WHERE recipe_id = ?
-                ORDER BY id DESC
-            """, (v_dict["id"],)).fetchall()
-            v_dict["images"] = [dict(im) for im in imgs]
-            results.append(v_dict)
-        return results
-
-
 def get_todos_enriched(include_completed: bool = True) -> list[dict]:
-    """표에 비노출된 컬럼(Lot ID, 부서, 의뢰자, 첨부파일명, 상위/하위업무 등)까지 모두 결합해 반환"""
+    """할 일의 모든 컬럼 + 비노출 연관 정보(상위/하위업무, 첨부파일명, 레시피 변경이력, 횡전개)를 결합해 반환"""
     query = "SELECT * FROM work_requests"
     if not include_completed:
         query += " WHERE status != '완료'"
@@ -676,7 +599,7 @@ def get_todos_enriched(include_completed: bool = True) -> list[dict]:
 
 
 def filter_todos_by_query(todos: list[dict], query: str) -> list[dict]:
-    """공백으로 구분된 다중 키워드(AND)로 할 일의 모든 컬럼·연관 데이터에서 검색하고 직접 매칭 우선 정렬 + 매칭 사유 기록"""
+    """공백으로 구분된 다중 키워드(AND)로 할 일의 모든 컬럼·연관 데이터에서 검색하고 매칭 사유를 기록"""
     clean_q = (query or "").strip().lower()
     if not clean_q:
         for t in todos:
@@ -702,8 +625,8 @@ def filter_todos_by_query(todos: list[dict], query: str) -> list[dict]:
                         is_only_child_match = False
                     if fname != "할 일 키워드":
                         short_val = fval.strip()
-                        if len(short_val) > 28:
-                            short_val = short_val[:28] + "…"
+                        if len(short_val) > 26:
+                            short_val = short_val[:26] + "…"
                         reasons.append(f"{fname}: {short_val}")
             t["_match_reasons"] = reasons[:3]
             if is_only_child_match:
@@ -714,12 +637,11 @@ def filter_todos_by_query(todos: list[dict], query: str) -> list[dict]:
     return direct_matched + related_matched
 
 
-def get_todos(include_completed: bool = False) -> list[dict]:
-    return get_todos_enriched(include_completed=include_completed)
-
+# ==============================================================================
+# 할 일 CRUD & 다중 증빙 이미지 저장
+# ==============================================================================
 
 def get_open_milestones() -> list[dict]:
-    """상위 업무(납기 큰일) 목록 조회"""
     with get_connection() as conn:
         rows = conn.execute("""
             SELECT id, title, due_date, status, department, requester, assignee, lot_id
@@ -879,6 +801,78 @@ def delete_work_request(req_id: int):
         conn.execute("UPDATE work_requests SET parent_id = NULL WHERE parent_id = ?", (int(req_id),))
         conn.execute("DELETE FROM work_requests WHERE id = ?", (int(req_id),))
         conn.commit()
+
+
+def delete_attachment(att_id: int):
+    with get_connection() as conn:
+        att = conn.execute("SELECT file_path FROM attachments WHERE id = ?", (int(att_id),)).fetchone()
+        if att and att["file_path"] and os.path.exists(att["file_path"]):
+            try:
+                os.remove(att["file_path"])
+            except Exception:
+                pass
+        conn.execute("DELETE FROM attachments WHERE id = ?", (int(att_id),))
+        conn.commit()
+
+
+# ==============================================================================
+# XML 파싱 & Handler-Vision 상세 조회
+# ==============================================================================
+
+def parse_xml_key_params(xml_str: str) -> list[dict]:
+    if not xml_str or not xml_str.strip():
+        return []
+    try:
+        root = ET.fromstring(xml_str.strip())
+        params = []
+        for elem in root.iter():
+            if len(elem) == 0 and elem.text and elem.text.strip():
+                params.append({"파라미터": elem.tag, "설정값": elem.text.strip()})
+        return params
+    except ET.ParseError:
+        fallback = []
+        for line in xml_str.splitlines():
+            clean = line.strip()
+            if not clean:
+                continue
+            if "=" in clean:
+                k, v = clean.split("=", 1)
+                fallback.append({"파라미터": k.strip(), "설정값": v.strip()})
+            else:
+                fallback.append({"파라미터": "RAW", "설정값": clean})
+        return fallback
+
+
+def get_handler_linked_visions_detail(handler_id: int) -> list[dict]:
+    with get_connection() as conn:
+        visions = conn.execute("""
+            SELECT v.id, v.name, v.version, v.description, v.xml_content, m.seq_order
+            FROM handler_vision_map m
+            JOIN recipes v ON m.vision_id = v.id
+            WHERE m.handler_id = ?
+            ORDER BY m.seq_order ASC, v.id ASC
+        """, (int(handler_id),)).fetchall()
+
+        results = []
+        for v in visions:
+            v_dict = dict(v)
+            v_dict["key_params"] = parse_xml_key_params(v_dict.get("xml_content", ""))
+            changes = conn.execute("""
+                SELECT id, change_type, before_val, after_val, change_reason, operator, evaluation_result, created_at
+                FROM recipe_changes
+                WHERE target_name = ? AND LOWER(target_type) = 'vision'
+                ORDER BY id DESC LIMIT 5
+            """, (v_dict["name"],)).fetchall()
+            v_dict["recent_changes"] = [dict(c) for c in changes]
+            imgs = conn.execute("""
+                SELECT id, file_name, file_path, tag, created_at
+                FROM recipe_images
+                WHERE recipe_id = ?
+                ORDER BY id DESC
+            """, (v_dict["id"],)).fetchall()
+            v_dict["images"] = [dict(im) for im in imgs]
+            results.append(v_dict)
+        return results
 
 
 # ==============================================================================
@@ -1048,18 +1042,6 @@ def delete_handler_vision_map(map_id: int):
         conn.commit()
 
 
-def delete_attachment(att_id: int):
-    with get_connection() as conn:
-        att = conn.execute("SELECT file_path FROM attachments WHERE id = ?", (int(att_id),)).fetchone()
-        if att and att["file_path"] and os.path.exists(att["file_path"]):
-            try:
-                os.remove(att["file_path"])
-            except Exception:
-                pass
-        conn.execute("DELETE FROM attachments WHERE id = ?", (int(att_id),))
-        conn.commit()
-
-
 def delete_deployment(dep_id: int):
     with get_connection() as conn:
         conn.execute("DELETE FROM deployments WHERE id = ?", (int(dep_id),))
@@ -1067,7 +1049,7 @@ def delete_deployment(dep_id: int):
 
 
 # ==============================================================================
-# Diff 검증 엔진 (폴더 트리 SHA256 + XML Line Diff + 이미지 픽셀 Diff)
+# Diff 검증 엔진 & 백업/복원 엔진
 # ==============================================================================
 
 def scan_recipe_folder(folder_path: str) -> dict:
@@ -1107,7 +1089,7 @@ def compare_folders(source_dir: str, target_dir: str) -> list[dict]:
         in_src = k in src_map
         in_tgt = k in tgt_map
         if in_src and in_tgt:
-            status = "🟢 일치" if src_map[k]["hash"] == tgt_map[k]["hash"] else "🟡 내용 변경"
+            status = "일치" if src_map[k]["hash"] == tgt_map[k]["hash"] else "내용 변경"
             results.append({
                 "파일경로": k,
                 "상태": status,
@@ -1122,7 +1104,7 @@ def compare_folders(source_dir: str, target_dir: str) -> list[dict]:
         elif in_src and not in_tgt:
             results.append({
                 "파일경로": k,
-                "상태": "🔴 누락 (설비에 없음)",
+                "상태": "누락 (설비에 없음)",
                 "기준크기(B)": src_map[k]["size"],
                 "설비크기(B)": 0,
                 "기준해시": src_map[k]["hash"][:12],
@@ -1134,7 +1116,7 @@ def compare_folders(source_dir: str, target_dir: str) -> list[dict]:
         else:
             results.append({
                 "파일경로": k,
-                "상태": "🔵 추가 (신규 파일)",
+                "상태": "추가 (신규 파일)",
                 "기준크기(B)": 0,
                 "설비크기(B)": tgt_map[k]["size"],
                 "기준해시": "-",
@@ -1193,10 +1175,6 @@ def compute_image_pixel_diff(img1: Image.Image, img2: Image.Image, threshold: in
     }
 
 
-# ==============================================================================
-# 백업 & 복원 엔진 (NF-03)
-# ==============================================================================
-
 def create_system_backup() -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -1237,7 +1215,7 @@ def restore_system_backup(zip_bytes: bytes) -> tuple[bool, str]:
             if not res or res[0] != "ok":
                 return False, "복원된 데이터베이스 무결성 검사에 실패했습니다."
 
-        migrate_todo_and_recipe_views()
+        migrate_schema()
         return True, "데이터베이스 및 첨부 이미지가 성공적으로 복원되었습니다."
     except Exception as e:
         return False, f"복원 중 오류 발생: {e}"
