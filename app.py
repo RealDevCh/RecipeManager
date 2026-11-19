@@ -4,7 +4,7 @@ import todo_view
 import other_views
 
 st.set_page_config(
-    page_title="RecipeManager v2.1.0",
+    page_title="RecipeManager v2.2.0",
     page_icon="⚙️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -49,7 +49,7 @@ FLUENT_THEMES = {
 }
 
 with st.sidebar:
-    st.markdown("### RecipeManager `v2.1.0`")
+    st.markdown("### RecipeManager `v2.2.0`")
     st.caption("반도체 검사·계측 실무 통합 워크스페이스")
 
     menu = st.radio(
@@ -85,7 +85,7 @@ with st.sidebar:
 theme = FLUENT_THEMES[theme_name]
 
 # ==============================================================================
-# 전역 MS Office Fluent CSS
+# 전역 MS Office Fluent CSS (한 행 전체 선택 테이블 + 심리스 달력)
 # ==============================================================================
 st.markdown(f"""
 <style>
@@ -127,7 +127,7 @@ section[data-testid="stSidebar"] {{
     color: {theme['text_sub']};
 }}
 
-/* 버튼 규격화 (줄바꿈 및 셀 넘침 방지) */
+/* 일반 버튼 규격화 */
 div[data-testid="stButton"] > button {{
     border-radius: 4px !important;
     overflow: hidden !important;
@@ -159,6 +159,108 @@ div[data-testid="stButton"] > button[kind="secondary"] {{
 div[data-testid="stButton"] > button[kind="secondary"]:hover {{
     background-color: {theme['accent_soft']} !important;
     border-color: {theme['accent']} !important;
+}}
+
+/* ============================================================================
+   [할 일 테이블] 체크박스 없음 + 셀이 아닌 '한 행 전체' 선택 & 하이라이트
+   ============================================================================ */
+div[data-testid="stVerticalBlock"]:has(> div .rm-fullrow-table-marker) {{
+    background: {theme['bg_card']} !important;
+    border: 1px solid {theme['border']} !important;
+    border-radius: 6px !important;
+    overflow: hidden !important;
+    gap: 0px !important;
+}}
+
+/* 헤더 및 모든 데이터 행의 컬럼 간격 제거 및 수직 정렬 */
+div[data-testid="stVerticalBlock"]:has(> div .rm-fullrow-table-marker) > div[data-testid="stHorizontalBlock"] {{
+    gap: 0px !important;
+    margin: 0px !important;
+    align-items: center !important;
+    border-bottom: 1px solid {theme['border']} !important;
+    transition: background-color 0.1s ease;
+}}
+div[data-testid="stVerticalBlock"]:has(> div .rm-fullrow-table-marker) > div[data-testid="stHorizontalBlock"]:last-child {{
+    border-bottom: none !important;
+}}
+
+/* 각 컬럼이 좁아져도 절대 아래로 꺾이지 않도록 고정 */
+div[data-testid="stVerticalBlock"]:has(> div .rm-fullrow-table-marker) div[data-testid="column"],
+div[data-testid="stVerticalBlock"]:has(> div .rm-fullrow-table-marker) div[data-testid="stColumn"] {{
+    min-width: 0 !important;
+    overflow: hidden !important;
+    padding: 0 !important;
+}}
+
+/* 숨겨진 행 상태 마커가 차지하는 여백 제거 */
+div[data-testid="stVerticalBlock"]:has(> div .rm-fullrow-table-marker) div[data-testid="stMarkdownContainer"]:has(.rm-row-marker) {{
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+}}
+
+/* 테이블 헤더 셀 */
+.rm-th-cell {{
+    background: #FAF9F8;
+    font-size: 12px;
+    font-weight: 700;
+    color: {theme['text_sub']};
+    padding: 9px 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}}
+.rm-th-center {{ text-align: center; }}
+.rm-th-left {{ text-align: left; padding-left: 8px; }}
+
+/* 데이터 행 전체 상태 스타일 (긴급 / 완료 / 선택됨) */
+div[data-testid="stHorizontalBlock"]:has(.rm-row-urgent) {{
+    background-color: #FDF3F4 !important;
+}}
+div[data-testid="stHorizontalBlock"]:has(.rm-row-urgent) button p {{
+    color: #A4262C !important;
+}}
+div[data-testid="stHorizontalBlock"]:has(.rm-row-done) button p {{
+    color: #8A8886 !important;
+    text-decoration: line-through !important;
+}}
+
+/* 한 행 전체 호버 효과 */
+div[data-testid="stHorizontalBlock"]:has(.rm-row-marker):hover {{
+    background-color: #F3F2F1 !important;
+}}
+
+/* 한 행 전체 선택됨 (체크박스 선택과 동일한 역할 + 좌측 강조 바) */
+div[data-testid="stHorizontalBlock"]:has(.rm-row-selected) {{
+    background-color: {theme['accent_soft']} !important;
+    box-shadow: inset 3px 0 0 {theme['accent']} !important;
+}}
+div[data-testid="stHorizontalBlock"]:has(.rm-row-selected):hover {{
+    background-color: {theme['accent_soft']} !important;
+}}
+div[data-testid="stHorizontalBlock"]:has(.rm-row-selected) button p {{
+    color: {theme['accent']} !important;
+    font-weight: 700 !important;
+}}
+
+/* 행 내부 개별 셀 버튼은 테두리/배경 없이 투명하게 통합 */
+div[data-testid="stHorizontalBlock"]:has(.rm-row-marker) div[data-testid="stButton"] > button {{
+    background: transparent !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    min-height: 35px !important;
+    height: 35px !important;
+    padding: 0 4px !important;
+    justify-content: center !important;
+    text-align: center !important;
+}}
+/* 4번째 컬럼(할 일 키워드)만 좌측 정렬 */
+div[data-testid="stHorizontalBlock"]:has(.rm-row-marker) > div:nth-child(4) div[data-testid="stButton"] > button {{
+    justify-content: flex-start !important;
+    text-align: left !important;
+    padding-left: 8px !important;
 }}
 
 /* 달력 요일 헤더 */
