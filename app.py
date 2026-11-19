@@ -4,7 +4,7 @@ import todo_view
 import other_views
 
 st.set_page_config(
-    page_title="RecipeManager v2.2.1",
+    page_title="RecipeManager v2.2.2",
     page_icon="⚙️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -49,7 +49,7 @@ FLUENT_THEMES = {
 }
 
 with st.sidebar:
-    st.markdown("### RecipeManager `v2.2.1`")
+    st.markdown("### RecipeManager `v2.2.2`")
     st.caption("반도체 검사·계측 실무 통합 워크스페이스")
 
     menu = st.radio(
@@ -85,7 +85,7 @@ with st.sidebar:
 theme = FLUENT_THEMES[theme_name]
 
 # ==============================================================================
-# 전역 MS Office Fluent CSS
+# 전역 MS Office Fluent CSS (상단 흰색 헤더 박스 제거 + 체크박스 없는 행 선택 테이블)
 # ==============================================================================
 st.markdown(f"""
 <style>
@@ -96,12 +96,19 @@ html, body, [class*="css"] {{
     background-color: {theme['bg_canvas']};
     color: {theme['text_main']};
 }}
+/* 상단 흰색 헤더 바 제거 (배경 투명화 & 본문 겹침 방지) */
+header[data-testid="stHeader"] {{
+    background: transparent !important;
+    background-color: transparent !important;
+    box-shadow: none !important;
+    height: 2.2rem !important;
+}}
 section[data-testid="stSidebar"] {{
     background-color: #FAF9F8;
     border-right: 1px solid {theme['border']};
 }}
 .block-container {{
-    padding-top: 1.1rem !important;
+    padding-top: 2.3rem !important;
     padding-bottom: 2rem !important;
 }}
 
@@ -127,7 +134,7 @@ section[data-testid="stSidebar"] {{
     color: {theme['text_sub']};
 }}
 
-/* 버튼 규격화 (줄바꿈 및 셀 넘침 방지) */
+/* 일반 버튼 규격화 */
 div[data-testid="stButton"] > button {{
     border-radius: 4px !important;
     overflow: hidden !important;
@@ -159,6 +166,123 @@ div[data-testid="stButton"] > button[kind="secondary"] {{
 div[data-testid="stButton"] > button[kind="secondary"]:hover {{
     background-color: {theme['accent_soft']} !important;
     border-color: {theme['accent']} !important;
+}}
+
+/* ============================================================================
+   [할 일 테이블] 체크박스 없음 · 버튼 테두리 없음 · 한 행 전체 클릭 & 파란색 강조
+   ============================================================================ */
+div[data-testid="stVerticalBlockBorderWrapper"]:has(.rm-clean-table) {{
+    background-color: {theme['bg_card']} !important;
+    border: 1px solid {theme['border']} !important;
+    border-radius: 6px !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+}}
+div[data-testid="stVerticalBlock"]:has(.rm-clean-table) {{
+    gap: 0px !important;
+    padding: 0 !important;
+    background-color: {theme['bg_card']} !important;
+}}
+
+/* 마커 요소 컨테이너의 여백 완전 제거 */
+div[data-testid="stElementContainer"]:has(.rm-clean-table),
+div[data-testid="stElementContainer"]:has(.rm-row-state) {{
+    display: none !important;
+}}
+
+/* 헤더 행 */
+div[data-testid="stHorizontalBlock"]:has(.rm-th-cell) {{
+    gap: 0px !important;
+    margin: 0px !important;
+    background-color: #FAF9F8 !important;
+    border-bottom: 1px solid {theme['border']} !important;
+}}
+div[data-testid="stHorizontalBlock"]:has(.rm-th-cell) > div {{
+    min-width: 0 !important;
+    padding: 0 !important;
+}}
+.rm-th-cell {{
+    font-size: 12px;
+    font-weight: 600;
+    color: {theme['text_sub']};
+    padding: 8px 8px;
+    border-right: 1px solid #EDEBE9;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}}
+.rm-th-center {{ text-align: center; }}
+.rm-th-left {{ text-align: left; }}
+
+/* 데이터 행 전체 스타일 */
+div[data-testid="stHorizontalBlock"]:has(.rm-row-state) {{
+    gap: 0px !important;
+    margin: 0px !important;
+    align-items: center !important;
+    background-color: #FFFFFF !important;
+    border-bottom: 1px solid #EDEBE9 !important;
+    transition: background-color 0.08s ease;
+}}
+div[data-testid="stHorizontalBlock"]:has(.rm-row-state):last-child {{
+    border-bottom: none !important;
+}}
+div[data-testid="stHorizontalBlock"]:has(.rm-row-state) > div {{
+    min-width: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+}}
+
+/* 긴급 / 완료 / 마우스 호버 / 선택된 행 강조 */
+div[data-testid="stHorizontalBlock"]:has(.rm-state-urgent) {{
+    background-color: #FDF3F4 !important;
+}}
+div[data-testid="stHorizontalBlock"]:has(.rm-state-urgent) button p {{
+    color: #A4262C !important;
+}}
+div[data-testid="stHorizontalBlock"]:has(.rm-state-done) button p {{
+    color: #8A8886 !important;
+    text-decoration: line-through !important;
+}}
+div[data-testid="stHorizontalBlock"]:has(.rm-row-state):hover {{
+    background-color: #F5F5F4 !important;
+}}
+div[data-testid="stHorizontalBlock"]:has(.rm-state-selected) {{
+    background-color: {theme['accent_soft']} !important;
+    box-shadow: inset 3px 0 0 {theme['accent']} !important;
+}}
+div[data-testid="stHorizontalBlock"]:has(.rm-state-selected):hover {{
+    background-color: {theme['accent_soft']} !important;
+}}
+div[data-testid="stHorizontalBlock"]:has(.rm-state-selected) button p {{
+    color: {theme['accent']} !important;
+    font-weight: 700 !important;
+}}
+
+/* 행 내부 셀 버튼은 테두리/배경 없이 투명한 표 셀처럼 처리 */
+div[data-testid="stHorizontalBlock"]:has(.rm-row-state) div[data-testid="stButton"] > button,
+div[data-testid="stHorizontalBlock"]:has(.rm-row-state) div[data-testid="stButton"] > button:hover,
+div[data-testid="stHorizontalBlock"]:has(.rm-row-state) div[data-testid="stButton"] > button:focus,
+div[data-testid="stHorizontalBlock"]:has(.rm-row-state) div[data-testid="stButton"] > button:active {{
+    background: transparent !important;
+    background-color: transparent !important;
+    border: none !important;
+    border-right: 1px solid #F3F2F1 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    outline: none !important;
+    min-height: 35px !important;
+    height: 35px !important;
+    padding: 0 8px !important;
+    margin: 0 !important;
+    justify-content: flex-start !important;
+    text-align: left !important;
+}}
+div[data-testid="stHorizontalBlock"]:has(.rm-row-state) > div:first-child div[data-testid="stButton"] > button {{
+    justify-content: center !important;
+    text-align: center !important;
+}}
+div[data-testid="stHorizontalBlock"]:has(.rm-row-state) > div:last-child div[data-testid="stButton"] > button {{
+    border-right: none !important;
 }}
 
 /* 달력 요일 헤더 */

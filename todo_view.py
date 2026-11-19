@@ -552,14 +552,9 @@ def open_new_todo_dialog():
 
 
 # ==============================================================================
-# 3. [할 일] 표 뷰 ('선택' 컬럼 제거 + 순서/긴급/구분 최소 폭 + 행 클릭 선택/우선순위 이동)
+# 3. [할 일] 표 뷰 (체크박스 없음 · 행 클릭 시 행 전체 파란색 강조 + 상세 + 우선순위 이동)
 # ==============================================================================
 def render_todo_table_view(all_todos: list[dict], id_to_title: dict[int, str], theme: dict):
-    if "todo_table_rev" not in st.session_state:
-        st.session_state["todo_table_rev"] = 0
-    if "last_df_sel_rows" not in st.session_state:
-        st.session_state["last_df_sel_rows"] = []
-
     f_c1, f_c2, f_c3 = st.columns([2.2, 3.6, 4.2])
     with f_c1:
         show_completed = st.toggle("완료된 일 표시", value=False)
@@ -600,101 +595,85 @@ def render_todo_table_view(all_todos: list[dict], id_to_title: dict[int, str], t
                 cur_sel_id = visible_ids[0]
                 st.session_state["selected_todo_id"] = cur_sel_id
 
-            # 표 위에 위치하는 우선순위 조정 바 (테이블에서 선택한 항목 바로 이동)
+            # 표 위에 위치하는 우선순위 조정 바
             p_c1, p_c2, p_c3, p_c4 = st.columns([1.6, 1.7, 1.7, 5.0])
             with p_c1:
-                if st.button("▲ 위로", use_container_width=True, help="테이블에서 선택한 항목을 위로 한 칸 이동"):
+                if st.button("▲ 위로", use_container_width=True, help="선택한 행을 위로 한 칸 이동"):
                     if db.move_selected_todo(visible_ids, cur_sel_id, "up"):
-                        st.session_state["todo_table_rev"] += 1
-                        st.session_state["last_df_sel_rows"] = []
                         st.rerun()
             with p_c2:
-                if st.button("▼ 아래로", use_container_width=True, help="테이블에서 선택한 항목을 아래로 한 칸 이동"):
+                if st.button("▼ 아래로", use_container_width=True, help="선택한 행을 아래로 한 칸 이동"):
                     if db.move_selected_todo(visible_ids, cur_sel_id, "down"):
-                        st.session_state["todo_table_rev"] += 1
-                        st.session_state["last_df_sel_rows"] = []
                         st.rerun()
             with p_c3:
-                if st.button("⏫ 최상단", use_container_width=True, help="테이블에서 선택한 항목을 맨 위로 이동"):
+                if st.button("⏫ 최상단", use_container_width=True, help="선택한 행을 맨 위로 이동"):
                     if db.move_selected_todo(visible_ids, cur_sel_id, "top"):
-                        st.session_state["todo_table_rev"] += 1
-                        st.session_state["last_df_sel_rows"] = []
                         st.rerun()
             with p_c4:
                 cur_rank = visible_ids.index(cur_sel_id) + 1
-                st.caption(f"선택 행: **#{cur_sel_id}** ({cur_rank}순위) · 행 클릭 시 상세보기 및 순서 이동")
+                st.caption(f"선택 행: **#{cur_sel_id}** ({cur_rank}순위) · 행 클릭 시 우측 상세보기 및 순서 이동")
 
-            rows_data = []
-            for idx, t in enumerate(todos, start=1):
-                tid = t["id"]
-                p_tag = f"[{id_to_title[t['parent_id']]}] " if t.get("parent_id") in id_to_title else ""
-                match_note = f"  [검색일치: {' · '.join(t['_match_reasons'])}]" if t.get("_match_reasons") else ""
+            # 체크박스 없이 한 행씩 통째로 선택되는 스프레드시트형 테이블
+            col_ratios = [0.65, 0.72, 0.72, 3.66, 1.25, 1.15, 0.85, 1.00]
+            col_headers = ["순서", "긴급", "구분", "할 일 키워드", "목표기한", "의뢰부서", "담당자", "상태"]
 
-                rows_data.append({
-                    "순서": idx,
-                    "긴급": t.get("urgency") or "-",
-                    "구분": "납기" if t["is_milestone"] else "실행",
-                    "할 일 키워드": f"{p_tag}{t['display_title']}{match_note}",
-                    "목표기한": t.get("due_date") or "-",
-                    "의뢰부서": t.get("department") or "-",
-                    "담당자": t.get("assignee") or "-",
-                    "상태": t.get("status") or "접수",
-                    "_tid": tid,
-                })
+            with st.container(border=True):
+                st.markdown("<span class='rm-clean-table'></span>", unsafe_allow_html=True)
 
-            df_display = pd.DataFrame(rows_data)
-            sel_bg = theme["accent_soft"]
-            sel_fg = theme["accent"]
+                hdr_cols = st.columns(col_ratios, gap="small")
+                for idx_h, (h_col, h_text) in enumerate(zip(hdr_cols, col_headers)):
+                    align_cls = "rm-th-center" if idx_h == 0 else "rm-th-left"
+                    h_col.markdown(f"<div class='rm-th-cell {align_cls}'>{h_text}</div>", unsafe_allow_html=True)
 
-            def style_todo_rows(row):
-                if row["_tid"] == cur_sel_id:
-                    return [f"background-color: {sel_bg}; color: {sel_fg}; font-weight: 700;"] * len(row)
-                if row["상태"] == "완료":
-                    return ["color: #8A8886;"] * len(row)
-                if row["긴급"] == "긴급":
-                    return ["background-color: #FDF3F4; color: #A4262C;"] * len(row)
-                return [""] * len(row)
+                for idx, t in enumerate(todos, start=1):
+                    tid = t["id"]
+                    is_selected = (tid == cur_sel_id)
+                    urg_val = t.get("urgency") or "-"
+                    stat_val = t.get("status") or "접수"
+                    p_tag = f"[{id_to_title[t['parent_id']]}] " if t.get("parent_id") in id_to_title else ""
+                    match_note = f"  [검색일치: {' · '.join(t['_match_reasons'])}]" if t.get("_match_reasons") else ""
+                    title_cell_txt = f"{p_tag}{t['display_title']}{match_note}"
 
-            styled_df = df_display.style.apply(style_todo_rows, axis=1)
+                    row_values = [
+                        str(idx),
+                        urg_val,
+                        "납기" if t["is_milestone"] else "실행",
+                        title_cell_txt,
+                        t.get("due_date") or "-",
+                        t.get("department") or "-",
+                        t.get("assignee") or "-",
+                        stat_val,
+                    ]
 
-            event = st.dataframe(
-                styled_df,
-                use_container_width=True,
-                hide_index=True,
-                on_select="rerun",
-                selection_mode="single-row",
-                key=f"todo_main_df_{st.session_state['todo_table_rev']}",
-                column_config={
-                    "_tid": None,
-                    "순서": st.column_config.NumberColumn("순서", format="%d", width="small"),
-                    "긴급": st.column_config.TextColumn("긴급", width="small"),
-                    "구분": st.column_config.TextColumn("구분", width="small"),
-                    "할 일 키워드": st.column_config.TextColumn("할 일 키워드", width="large"),
-                    "목표기한": st.column_config.TextColumn("목표기한", width="small"),
-                    "의뢰부서": st.column_config.TextColumn("의뢰부서", width="small"),
-                    "담당자": st.column_config.TextColumn("담당자", width="small"),
-                    "상태": st.column_config.TextColumn("상태", width="small"),
-                }
-            )
+                    state_cls = "rm-row-state"
+                    if is_selected:
+                        state_cls += " rm-state-selected"
+                    elif stat_val == "완료":
+                        state_cls += " rm-state-done"
+                    elif urg_val == "긴급":
+                        state_cls += " rm-state-urgent"
 
-            if event and event.selection:
-                sel_rows = list(event.selection.rows)
-                if sel_rows:
-                    if sel_rows != st.session_state["last_df_sel_rows"]:
-                        st.session_state["last_df_sel_rows"] = sel_rows
-                        clicked_idx = sel_rows[0]
-                        if 0 <= clicked_idx < len(visible_ids):
-                            st.session_state["selected_todo_id"] = visible_ids[clicked_idx]
-                            st.rerun()
-                else:
-                    st.session_state["last_df_sel_rows"] = []
+                    r_cols = st.columns(col_ratios, gap="small")
+                    for c_idx, (r_col, cell_val) in enumerate(zip(r_cols, row_values)):
+                        with r_col:
+                            if c_idx == 0:
+                                st.markdown(f"<span class='{state_cls}'></span>", unsafe_allow_html=True)
+                            if st.button(
+                                cell_val,
+                                key=f"tr_{tid}_c{c_idx}",
+                                use_container_width=True,
+                                help=title_cell_txt if c_idx == 3 else None
+                            ):
+                                if st.session_state.get("selected_todo_id") != tid:
+                                    st.session_state["selected_todo_id"] = tid
+                                    st.rerun()
 
     with col_detail:
         sel_id = st.session_state.get("selected_todo_id")
         if sel_id and sel_id in visible_ids:
             render_todo_detail_editor(sel_id, key_prefix="tbl_ed", show_close_btn=False)
         else:
-            st.info("좌측 표에서 항목 한 줄을 클릭하면 오른쪽에 세부 정보가 표시됩니다.")
+            st.info("좌측 표에서 항목 한 행을 클릭하면 오른쪽에 세부 정보가 표시됩니다.")
 
 
 # ==============================================================================
