@@ -16,6 +16,12 @@ DB_PATH = os.path.join(DATA_DIR, "recipe_manager.db")
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}
 TEXT_EXTS = {".xml", ".txt", ".ini", ".cfg", ".json", ".csv", ".dat", ".log", ".rcp"}
 
+MILESTONE_LEVELS = {"납기(큰일)", "프로젝트/큰 납기"}
+
+
+def is_milestone_level(task_level: str | None) -> bool:
+    return (task_level or "").strip() in MILESTONE_LEVELS
+
 
 def get_kst_now() -> datetime:
     return datetime.now(KST)
@@ -128,24 +134,24 @@ def init_db():
             CREATE TABLE IF NOT EXISTS work_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 req_type TEXT NOT NULL DEFAULT '할 일',
-                title TEXT NOT NULL,
-                content TEXT,
-                product TEXT,
-                step TEXT,
-                module TEXT,
-                purpose TEXT,
-                equipment TEXT,
-                department TEXT,
-                requester TEXT,
-                assignee TEXT DEFAULT '유철형',
-                lot_id TEXT,
-                recipe_id TEXT,
-                urgency TEXT DEFAULT '보통',
+                title TEXT NOT NULL DEFAULT '',
+                content TEXT DEFAULT '',
+                product TEXT DEFAULT '',
+                step TEXT DEFAULT '',
+                module TEXT DEFAULT '',
+                purpose TEXT DEFAULT '',
+                equipment TEXT DEFAULT '',
+                department TEXT DEFAULT '',
+                requester TEXT DEFAULT '',
+                assignee TEXT DEFAULT '',
+                lot_id TEXT DEFAULT '',
+                recipe_id TEXT DEFAULT '',
+                urgency TEXT DEFAULT '',
                 priority_order INTEGER DEFAULT 0,
-                task_level TEXT DEFAULT '실행(소규모)',
+                task_level TEXT DEFAULT '일반/단독 실행',
                 parent_id INTEGER DEFAULT NULL,
                 status TEXT DEFAULT '접수' CHECK(status IN ('접수', '진행중', '평가/검증', '완료', '보류')),
-                due_date TEXT,
+                due_date TEXT DEFAULT '',
                 created_at TEXT,
                 updated_at TEXT
             );
@@ -233,13 +239,16 @@ def init_db():
 def migrate_schema():
     """구버전 DB 백업 복원 시에도 무손실로 최신 컬럼을 자동 추가"""
     wr_new_cols = {
-        "urgency": "TEXT DEFAULT '보통'",
+        "urgency": "TEXT DEFAULT ''",
         "priority_order": "INTEGER DEFAULT 0",
         "department": "TEXT DEFAULT ''",
         "requester": "TEXT DEFAULT ''",
-        "assignee": "TEXT DEFAULT '유철형'",
+        "assignee": "TEXT DEFAULT ''",
         "lot_id": "TEXT DEFAULT ''",
-        "task_level": "TEXT DEFAULT '실행(소규모)'",
+        "module": "TEXT DEFAULT ''",
+        "purpose": "TEXT DEFAULT ''",
+        "recipe_id": "TEXT DEFAULT ''",
+        "task_level": "TEXT DEFAULT '일반/단독 실행'",
         "parent_id": "INTEGER DEFAULT NULL",
     }
     with get_connection() as conn:
@@ -248,7 +257,7 @@ def migrate_schema():
             if col_name not in wr_cols:
                 conn.execute(f"ALTER TABLE work_requests ADD COLUMN {col_name} {col_def}")
         conn.execute("UPDATE work_requests SET priority_order = id WHERE priority_order IS NULL OR priority_order = 0")
-        conn.execute("UPDATE work_requests SET task_level = '실행(소규모)' WHERE task_level IS NULL OR TRIM(task_level) = ''")
+        conn.execute("UPDATE work_requests SET task_level = '일반/단독 실행' WHERE task_level IS NULL OR TRIM(task_level) = ''")
 
         rc_cols = [row["name"] for row in conn.execute("PRAGMA table_info(recipe_conditions)").fetchall()]
         if "condition_desc" not in rc_cols:
@@ -357,39 +366,50 @@ def _seed_initial_data():
         if cur.execute("SELECT COUNT(*) FROM work_requests").fetchone()[0] == 0:
             cur.execute("""
                 INSERT INTO work_requests (
-                    req_type, title, content, product, step, equipment,
-                    department, requester, assignee, lot_id,
+                    req_type, title, content, product, step, module, purpose, equipment,
+                    department, requester, assignee, lot_id, recipe_id,
                     urgency, priority_order, task_level, parent_id, status, due_date, created_at, updated_at
                 )
                 VALUES ('신규 셋업', 'Prod_Alpha 양산 안정화 및 전 설비 횡전개', 'Step01~02 조도/과검 개선 후 EQP-01~04 일괄 전개 마일스톤',
-                        'Prod_Alpha', 'Step01_Align', 'EQP-01', '공정설계팀', '김민수', '유철형', 'LOT-26A01',
-                        '높음', 1, '납기(큰일)', NULL, '진행중', ?, ?, ?)
+                        'Prod_Alpha', 'Step01_Align', 'Mod_Front', 'Mass_Production', 'EQP-01',
+                        '공정설계팀', '김민수', '유철형', 'LOT-26A01', '[HANDLER] HDL_ALPHA_MAIN (v2.1)',
+                        '높음', 1, '프로젝트/큰 납기', NULL, '진행중', ?, ?, ?)
             """, (plus5_str, now_str, now_str))
             milestone_id = cur.lastrowid
 
             sample_todos = [
                 ("Align Fail 조치", "EQP-01 Step01 Align 조도 보정", "조도 저하로 인한 마크 인식률 하락 보정 (LightCh1 160 -> 180)",
-                 "Prod_Alpha", "Step01_Align", "EQP-01", "제조기술팀", "박지훈", "유철형", "LOT-26A01",
-                 "긴급", 2, "실행(소규모)", milestone_id, "진행중", today_str),
+                 "Prod_Alpha", "Step01_Align", "Mod_Front", "Mass_Production", "EQP-01",
+                 "제조기술팀", "박지훈", "유철형", "LOT-26A01", "[VISION] VIS_ALIGN_MARK_A (v1.4)",
+                 "긴급", 2, "일반/단독 실행", milestone_id, "진행중", today_str),
                 ("파라미터 튜닝", "VIS_INSPECT_SURFACE 민감도 재검증", "과검(False Call) 저감을 위한 MinBlobArea 10 -> 12 상향 평가",
-                 "Prod_Alpha", "Step02_Inspect", "EQP-02", "품질보증팀", "이서연", "유철형", "LOT-26A02",
-                 "높음", 3, "실행(소규모)", milestone_id, "평가/검증", today_str),
+                 "Prod_Alpha", "Step02_Inspect", "Mod_Front", "Mass_Production", "EQP-02",
+                 "품질보증팀", "이서연", "유철형", "LOT-26A02", "[VISION] VIS_INSPECT_SURFACE (v3.0)",
+                 "높음", 3, "일반/단독 실행", milestone_id, "평가/검증", today_str),
                 ("횡전개", "HDL_ALPHA_MAIN v2.1 전 설비 횡전개", "EQP-01 검증 완료 후 EQP-02~04 일괄 적용 및 Diff 대조",
-                 "Prod_Alpha", "Step01_Align", "EQP-03", "설비기술팀", "정현우", "유철형", "LOT-26A03",
-                 "보통", 4, "실행(소규모)", milestone_id, "접수", plus2_str),
-                ("신규 셋업", "Prod_Beta 신규 평가 레시피 백업", "평가 완료 후 마스터 DB 스냅샷 저장",
-                 "Prod_Beta", "Step02_Inspect", "EQP-04", "공정설계팀", "김민수", "유철형", "LOT-26B01",
-                 "낮음", 5, "실행(소규모)", None, "접수", plus2_str),
+                 "Prod_Alpha", "Step01_Align", "Mod_Front", "Mass_Production", "EQP-03",
+                 "설비기술팀", "정현우", "유철형", "LOT-26A03", "[HANDLER] HDL_ALPHA_MAIN (v2.1)",
+                 "보통", 4, "일반/단독 실행", milestone_id, "접수", plus2_str),
+                ("단발 요청", "Prod_Beta 평가 레시피 오프셋 0.05 보정", "단발성 레시피 조치 요청 (상위 프로젝트 없는 단독 실행 건)",
+                 "Prod_Beta", "Step02_Inspect", "Mod_Rear", "Evaluation", "EQP-04",
+                 "공정설계팀", "김민수", "유철형", "LOT-26B01", "[VISION] VIS_BETA_EDGE (v1.0)",
+                 "보통", 5, "일반/단독 실행", None, "접수", today_str),
             ]
-            for r_type, title, content, prod, step, eqp, dept, reqr, asg, lot, urg, p_ord, t_lvl, p_id, stat, d_date in sample_todos:
+            for (
+                r_type, title, content, prod, step, mod, purp, eqp,
+                dept, reqr, asg, lot, rcp, urg, p_ord, t_lvl, p_id, stat, d_date
+            ) in sample_todos:
                 cur.execute("""
                     INSERT INTO work_requests (
-                        req_type, title, content, product, step, equipment,
-                        department, requester, assignee, lot_id,
+                        req_type, title, content, product, step, module, purpose, equipment,
+                        department, requester, assignee, lot_id, recipe_id,
                         urgency, priority_order, task_level, parent_id, status, due_date, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (r_type, title, content, prod, step, eqp, dept, reqr, asg, lot, urg, p_ord, t_lvl, p_id, stat, d_date, now_str, now_str))
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    r_type, title, content, prod, step, mod, purp, eqp,
+                    dept, reqr, asg, lot, rcp, urg, p_ord, t_lvl, p_id, stat, d_date, now_str, now_str
+                ))
 
             cur.execute("""
                 INSERT INTO recipe_changes (request_id, target_type, target_name, change_type, before_val, after_val, change_reason, operator, evaluation_result, created_at)
@@ -452,8 +472,19 @@ def get_autocomplete_options(column_name: str, master_category: str = None, defa
         except Exception:
             pass
 
+    if column_name == "recipe_id":
+        try:
+            with get_connection() as conn:
+                r_rows = conn.execute(
+                    "SELECT recipe_type, name, version FROM recipes ORDER BY recipe_type ASC, name ASC, id DESC"
+                ).fetchall()
+                for rr in r_rows:
+                    options.append(f"[{rr['recipe_type']}] {rr['name']} ({rr['version']})")
+        except Exception:
+            pass
+
     allowed_cols = {
-        "title", "department", "requester", "lot_id",
+        "title", "department", "requester", "lot_id", "recipe_id",
         "product", "step", "module", "purpose", "equipment", "assignee", "req_type", "urgency"
     }
     if column_name in allowed_cols:
@@ -538,7 +569,7 @@ def get_todos_enriched(include_completed: bool = True) -> list[dict]:
             "SELECT request_id, title FROM deployments WHERE request_id IS NOT NULL"
         ).fetchall()]
 
-    id_to_title = {r["id"]: r["title"] for r in all_rows}
+    id_to_title = {r["id"]: (r["title"] or "(제목 없음)") for r in all_rows}
     parent_to_children_text: dict[int, list[str]] = {}
     for r in all_rows:
         pid = r.get("parent_id")
@@ -562,6 +593,8 @@ def get_todos_enriched(include_completed: bool = True) -> list[dict]:
     for t in todos:
         tid = t["id"]
         pid = t.get("parent_id")
+        t["display_title"] = (t.get("title") or "").strip() or "(제목 없음)"
+        t["is_milestone"] = is_milestone_level(t.get("task_level"))
         t["parent_title"] = id_to_title.get(pid, "") if pid else ""
         t["child_summary"] = " ".join(parent_to_children_text.get(tid, []))
         t["attachment_names"] = " ".join(req_to_atts.get(tid, []))
@@ -581,6 +614,7 @@ def get_todos_enriched(include_completed: bool = True) -> list[dict]:
             "Module": t.get("module") or "",
             "Purpose": t.get("purpose") or "",
             "설비(Equipment)": t.get("equipment") or "",
+            "Recipe": t.get("recipe_id") or "",
             "목표 기한": t.get("due_date") or "",
             "상태": t.get("status") or "",
             "긴급도": t.get("urgency") or "",
@@ -638,15 +672,15 @@ def filter_todos_by_query(todos: list[dict], query: str) -> list[dict]:
 
 
 # ==============================================================================
-# 할 일 CRUD & 다중 증빙 이미지 저장
+# 할 일 CRUD & 다중 증빙 이미지 저장 (모든 필드 공란 허용)
 # ==============================================================================
 
 def get_open_milestones() -> list[dict]:
     with get_connection() as conn:
         rows = conn.execute("""
-            SELECT id, title, due_date, status, department, requester, assignee, lot_id
+            SELECT id, title, due_date, status, department, requester, assignee, lot_id, task_level
             FROM work_requests
-            WHERE task_level = '납기(큰일)'
+            WHERE task_level IN ('납기(큰일)', '프로젝트/큰 납기')
             ORDER BY CASE WHEN status = '완료' THEN 1 ELSE 0 END ASC, priority_order ASC, id DESC
         """).fetchall()
         return [dict(r) for r in rows]
@@ -659,23 +693,25 @@ def get_todo_by_id(todo_id: int) -> dict | None:
 
 
 def create_todo(
-    title: str,
+    title: str = "",
     content: str = "",
-    urgency: str = "보통",
+    urgency: str = "",
     req_type: str = "할 일",
     product: str = "",
     step: str = "",
+    module: str = "",
+    purpose: str = "",
     equipment: str = "",
+    recipe_id: str = "",
     department: str = "",
     requester: str = "",
-    assignee: str = "유철형",
+    assignee: str = "",
     lot_id: str = "",
     due_date: str = "",
-    task_level: str = "실행(소규모)",
+    task_level: str = "일반/단독 실행",
     parent_id: int | None = None
 ) -> int:
     now_str = get_kst_str()
-    clean_assignee = (assignee or "").strip() or "유철형"
     with get_connection() as conn:
         cur = conn.cursor()
         min_row = cur.execute("SELECT MIN(priority_order) as min_ord FROM work_requests WHERE status != '완료'").fetchone()
@@ -683,17 +719,33 @@ def create_todo(
 
         cur.execute("""
             INSERT INTO work_requests (
-                req_type, title, content, product, step, equipment,
+                req_type, title, content, product, step, module, purpose, equipment, recipe_id,
                 department, requester, assignee, lot_id,
                 urgency, priority_order, task_level, parent_id,
                 status, due_date, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '접수', ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '접수', ?, ?, ?)
         """, (
-            req_type, title.strip(), content, product, step, equipment,
-            department, requester, clean_assignee, lot_id,
-            urgency, next_ord, task_level, parent_id,
-            due_date, now_str, now_str
+            (req_type or "할 일").strip(),
+            (title or "").strip(),
+            content or "",
+            (product or "").strip(),
+            (step or "").strip(),
+            (module or "").strip(),
+            (purpose or "").strip(),
+            (equipment or "").strip(),
+            (recipe_id or "").strip(),
+            (department or "").strip(),
+            (requester or "").strip(),
+            (assignee or "").strip(),
+            (lot_id or "").strip(),
+            (urgency or "").strip(),
+            next_ord,
+            (task_level or "일반/단독 실행").strip(),
+            parent_id,
+            (due_date or "").strip(),
+            now_str,
+            now_str
         ))
         new_id = cur.lastrowid
         if next_ord == 0:
@@ -704,37 +756,53 @@ def create_todo(
 
 def update_todo_detail(
     todo_id: int,
-    title: str,
-    urgency: str,
-    status: str,
-    content: str,
+    title: str = "",
+    urgency: str = "",
+    status: str = "접수",
+    content: str = "",
     product: str = "",
     step: str = "",
+    module: str = "",
+    purpose: str = "",
     equipment: str = "",
+    recipe_id: str = "",
     department: str = "",
     requester: str = "",
-    assignee: str = "유철형",
+    assignee: str = "",
     lot_id: str = "",
     due_date: str = "",
-    task_level: str = "실행(소규모)",
+    task_level: str = "일반/단독 실행",
     parent_id: int | None = None
 ):
-    clean_assignee = (assignee or "").strip() or "유철형"
     with get_connection() as conn:
         conn.execute("""
             UPDATE work_requests
             SET title = ?, urgency = ?, status = ?, content = ?,
-                product = ?, step = ?, equipment = ?,
+                product = ?, step = ?, module = ?, purpose = ?, equipment = ?, recipe_id = ?,
                 department = ?, requester = ?, assignee = ?, lot_id = ?,
                 due_date = ?, task_level = ?, parent_id = ?,
                 updated_at = ?
             WHERE id = ?
         """, (
-            title.strip(), urgency, status, content,
-            product, step, equipment,
-            department, requester, clean_assignee, lot_id,
-            due_date, task_level, parent_id,
-            get_kst_str(), int(todo_id)
+            (title or "").strip(),
+            (urgency or "").strip(),
+            status or "접수",
+            content or "",
+            (product or "").strip(),
+            (step or "").strip(),
+            (module or "").strip(),
+            (purpose or "").strip(),
+            (equipment or "").strip(),
+            (recipe_id or "").strip(),
+            (department or "").strip(),
+            (requester or "").strip(),
+            (assignee or "").strip(),
+            (lot_id or "").strip(),
+            (due_date or "").strip(),
+            (task_level or "일반/단독 실행").strip(),
+            parent_id,
+            get_kst_str(),
+            int(todo_id)
         ))
         conn.commit()
 

@@ -271,7 +271,7 @@ def render_recipe_manage_view():
                         img_tag = st.selectbox("이미지 태그", ["ALIGN", "PATTERN", "MASTER", "DEFECT"], key=f"tag_{sel_rec['id']}")
                         p_img = None
                         if HAS_PASTE_BTN:
-                            pr = paste_image_button("클립보드 붙여넣기 (Ctrl+V)", background_color="#0F6CBD", text_color="#FFFFFF")
+                            pr = paste_image_button("클립보드 붙여넣기 (Ctrl+V)", background_color="#0F6CBD", text_color="#FFFFFF", key=f"rec_paste_{sel_rec['id']}")
                             if pr.image_data is not None:
                                 p_img = pr.image_data
                         up_i = st.file_uploader("이미지 파일 업로드", type=["png", "jpg", "jpeg", "bmp"], key=f"up_ri_{sel_rec['id']}")
@@ -435,7 +435,7 @@ def render_deploy_and_diff_view():
                 with st.form("new_dep_form"):
                     d_title = st.text_input("횡전개 프로젝트명*", placeholder="예: HDL_ALPHA_MAIN v2.1 전 호기 횡전개")
                     d_h = st.selectbox("기준 Handler Recipe*", handlers, format_func=lambda x: x["label"])
-                    d_req = st.selectbox("연계 할 일", [None] + todos, format_func=lambda x: f"#{x['id']} {x['title']}" if x else "없음")
+                    d_req = st.selectbox("연계 할 일", [None] + todos, format_func=lambda x: f"#{x['id']} {x['title'] or '(제목 없음)'}" if x else "없음")
                     d_eqs = st.multiselect("대상 설비*", all_eqps, default=all_eqps)
                     d_rsn = st.text_input("사유", placeholder="표준 파라미터 양산 전개")
                     if st.form_submit_button("횡전개 생성", type="primary"):

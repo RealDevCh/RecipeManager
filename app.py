@@ -4,7 +4,7 @@ import todo_view
 import other_views
 
 st.set_page_config(
-    page_title="RecipeManager v2.0.0",
+    page_title="RecipeManager v2.1.0",
     page_icon="⚙️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -13,7 +13,7 @@ st.set_page_config(
 db.init_db()
 
 # ==============================================================================
-# MS Office Fluent UI 테마 정의 (일관된 엔터프라이즈 디자인 시스템)
+# MS Office Fluent UI 테마 정의
 # ==============================================================================
 FLUENT_THEMES = {
     "MS Office 블루 (기본)": {
@@ -49,7 +49,7 @@ FLUENT_THEMES = {
 }
 
 with st.sidebar:
-    st.markdown("### RecipeManager `v2.0.0`")
+    st.markdown("### RecipeManager `v2.1.0`")
     st.caption("반도체 검사·계측 실무 통합 워크스페이스")
 
     menu = st.radio(
@@ -61,7 +61,8 @@ with st.sidebar:
             "설비 횡전개 및 Diff",
             "기준정보 및 백업",
         ],
-        label_visibility="collapsed"
+        label_visibility="collapsed",
+        key="main_sidebar_menu"
     )
 
     st.divider()
@@ -79,12 +80,12 @@ with st.sidebar:
     c_s4.metric("Vision", f"{vis_cnt}개")
 
     st.divider()
-    theme_name = st.selectbox("화면 테마", list(FLUENT_THEMES.keys()), index=0)
+    theme_name = st.selectbox("화면 테마", list(FLUENT_THEMES.keys()), index=0, key="ui_theme_select")
 
 theme = FLUENT_THEMES[theme_name]
 
 # ==============================================================================
-# 전역 MS Office Fluent CSS (리본 헤더 + 상단 마일스톤 로드맵 + 심리스 7열 달력)
+# 전역 MS Office Fluent CSS
 # ==============================================================================
 st.markdown(f"""
 <style>
@@ -126,17 +127,19 @@ section[data-testid="stSidebar"] {{
     color: {theme['text_sub']};
 }}
 
-/* 버튼 기본 규격화 (줄바꿈/넘침 방지) */
+/* 버튼 규격화 (줄바꿈 및 셀 넘침 방지) */
 div[data-testid="stButton"] > button {{
     border-radius: 4px !important;
     overflow: hidden !important;
     text-overflow: ellipsis !important;
+    padding-left: 8px !important;
+    padding-right: 8px !important;
 }}
 div[data-testid="stButton"] > button p {{
     white-space: nowrap !important;
     overflow: hidden !important;
     text-overflow: ellipsis !important;
-    font-size: 12.5px !important;
+    font-size: 12px !important;
     margin: 0 !important;
 }}
 div[data-testid="stButton"] > button[kind="primary"] {{
@@ -148,106 +151,31 @@ div[data-testid="stButton"] > button[kind="primary"]:hover {{
     background-color: {theme['accent_hover']} !important;
     border-color: {theme['accent_hover']} !important;
 }}
-
-/* [시안 C] 상단 마일스톤 로드맵 바 */
-.ms-roadmap-bar {{
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-    gap: 10px;
-    margin-bottom: 12px;
-}}
-a.ms-roadmap-card {{
-    display: block;
-    text-decoration: none !important;
-    background: {theme['bg_card']};
-    border: 1px solid {theme['border']};
-    border-left: 4px solid #8A8886;
-    border-radius: 6px;
-    padding: 10px 12px;
+div[data-testid="stButton"] > button[kind="secondary"] {{
+    background-color: #F8F9FA !important;
+    border: 1px solid {theme['border']} !important;
     color: {theme['text_main']} !important;
-    transition: all 0.15s ease;
 }}
-a.ms-roadmap-card:hover {{
-    border-color: {theme['accent']};
-    box-shadow: 0 2px 6px rgba(0,0,0,0.06);
-}}
-a.ms-roadmap-card.active {{
-    background: {theme['accent_soft']};
-    border-color: {theme['accent']};
-    border-left: 4px solid {theme['accent']};
-}}
-.ms-card-top {{
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 4px;
-}}
-.ms-badge-all {{
-    font-size: 11px;
-    font-weight: 700;
-    color: {theme['text_sub']};
-    background: #F3F2F1;
-    padding: 1px 6px;
-    border-radius: 4px;
-}}
-.ms-badge-target {{
-    font-size: 11px;
-    font-weight: 700;
-    color: {theme['accent']};
-    background: {theme['accent_soft']};
-    padding: 1px 6px;
-    border-radius: 4px;
-}}
-.ms-card-cnt {{
-    font-size: 11px;
-    color: {theme['text_sub']};
-}}
-.ms-card-title {{
-    font-size: 13px;
-    font-weight: 700;
-    color: {theme['text_main']};
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    margin-bottom: 6px;
-}}
-.ms-prog-track {{
-    width: 100%;
-    height: 5px;
-    background: #EDEBE9;
-    border-radius: 3px;
-    overflow: hidden;
-    margin-bottom: 5px;
-}}
-.ms-prog-fill {{
-    height: 100%;
-    background: {theme['accent']};
-    border-radius: 3px;
-}}
-.ms-card-sub {{
-    font-size: 11px;
-    color: {theme['text_sub']};
+div[data-testid="stButton"] > button[kind="secondary"]:hover {{
+    background-color: {theme['accent_soft']} !important;
+    border-color: {theme['accent']} !important;
 }}
 
-/* [시안 B] 풀폭 심리스 7열 달력 그리드 & 슬림 이벤트 칩 */
-.cal-wrapper {{
-    background: {theme['bg_card']};
-    border: 1px solid {theme['border']};
-    border-radius: 6px;
-    overflow: hidden;
-}}
+/* 달력 요일 헤더 */
 .cal-dow-row {{
     display: grid;
     grid-template-columns: repeat(7, minmax(0, 1fr));
-    background: #FAF9F8;
-    border-bottom: 1px solid {theme['border']};
+    background: #FFFFFF;
+    border: 1px solid {theme['border']};
+    border-radius: 4px;
+    margin-bottom: 6px;
 }}
 .cal-dow-cell {{
     text-align: center;
     font-size: 12px;
     font-weight: 700;
     color: {theme['text_main']};
-    padding: 8px 0;
+    padding: 7px 0;
     border-right: 1px solid {theme['border']};
 }}
 .cal-dow-cell:last-child {{
@@ -256,45 +184,18 @@ a.ms-roadmap-card.active {{
 .cal-dow-cell.sat {{ color: #0F6CBD; }}
 .cal-dow-cell.sun {{ color: #A4262C; }}
 
-.cal-body-grid {{
-    display: grid;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
-}}
-.cal-grid-cell {{
-    min-height: 116px;
-    padding: 6px 7px;
-    border-right: 1px solid {theme['border']};
-    border-bottom: 1px solid {theme['border']};
-    background: #FFFFFF;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-}}
-.cal-grid-cell.week-cell {{
-    min-height: 260px;
-}}
-.cal-grid-cell:nth-child(7n) {{
-    border-right: none;
-}}
-.cal-grid-cell.is-muted {{
-    background: #FAF9F8;
-}}
-.cal-grid-cell.is-today {{
-    background: #F8FBFF;
-}}
-.cal-cell-top {{
-    display: flex;
-    align-items: center;
-    margin-bottom: 2px;
-}}
 .cal-date-num {{
     font-size: 12px;
-    font-weight: 600;
+    font-weight: 700;
     color: {theme['text_main']};
+    margin-bottom: 4px;
 }}
+.cal-date-num.sat {{ color: #0F6CBD; }}
+.cal-date-num.sun {{ color: #A4262C; }}
 .cal-date-muted {{
     font-size: 11.5px;
     color: #A19F9D;
+    margin-bottom: 4px;
 }}
 .cal-today-num {{
     display: inline-block;
@@ -304,92 +205,11 @@ a.ms-roadmap-card.active {{
     font-weight: 700;
     padding: 1px 7px;
     border-radius: 10px;
-}}
-.cal-cell-body {{
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-}}
-
-/* 달력 이벤트 칩 (<a target="_self">) */
-a.cal-event-pill {{
-    display: block;
-    text-decoration: none !important;
-    padding: 3px 6px;
-    border-radius: 3px;
-    font-size: 11.5px;
-    line-height: 1.3;
-    border-left: 3px solid {theme['accent']};
-    background: {theme['accent_soft']};
-    color: {theme['text_main']} !important;
-    transition: filter 0.12s ease;
-}}
-a.cal-event-pill:hover {{
-    filter: brightness(0.96);
-}}
-a.cal-event-pill.pill-milestone {{
-    background: #EBF5FF;
-    border-left-color: #0F6CBD;
-    color: #004578 !important;
-    font-weight: 700;
-}}
-a.cal-event-pill.pill-urgent {{
-    background: #FDF3F4;
-    border-left-color: #C50F1F;
-    color: #750B1C !important;
-    font-weight: 600;
-}}
-a.cal-event-pill.pill-high {{
-    background: #FFF9F0;
-    border-left-color: #D83B01;
-    color: #6B2900 !important;
-}}
-a.cal-event-pill.pill-normal {{
-    background: #F1FAF1;
-    border-left-color: #107C41;
-    color: #0B532B !important;
-}}
-a.cal-event-pill.pill-done {{
-    background: #F3F2F1;
-    border-left-color: #A19F9D;
-    color: #605E5C !important;
-    text-decoration: line-through !important;
-}}
-a.cal-event-pill.pill-selected {{
-    outline: 2px solid {theme['accent']};
-}}
-.cal-pill-title {{
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}}
-.cal-pill-meta {{
-    font-size: 10.5px;
-    color: #605E5C;
-    margin-top: 2px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}}
-.cal-day-board {{
-    background: #FFFFFF;
-    border: 1px solid {theme['border']};
-    border-radius: 6px;
-    padding: 12px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}}
-.cal-empty-day {{
-    color: #8A8886;
-    font-size: 13px;
-    padding: 24px 0;
-    text-align: center;
+    margin-bottom: 4px;
 }}
 </style>
 """, unsafe_allow_html=True)
 
-# 상단 Office 리본 헤더
 st.markdown(f"""
 <div class="office-ribbon">
     <div>
@@ -400,7 +220,6 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# 메뉴 라우팅
 if menu == "할 일":
     todo_view.render_todo_module(theme)
 elif menu == "레시피 확인":
